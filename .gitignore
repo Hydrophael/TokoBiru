@@ -1,0 +1,32 @@
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtualenv
+venv/
+.venv/
+env/
+
+# Tes dan cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Vercel
+.vercel/
+
+# Editor dan OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Log dan berkas sementara
+*.log
+
+README.md
