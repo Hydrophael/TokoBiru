@@ -23,7 +23,6 @@
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
-html.big{font-size:118%}
 body{font-family:var(--body);font-size:1.0625rem;color:var(--ink);background:var(--bg);line-height:1.55;min-height:100vh;-webkit-font-smoothing:antialiased;
   background-image:radial-gradient(1200px 500px at 85% -10%,var(--blue-soft),transparent 70%)}
 button,input,select,textarea{font:inherit;color:inherit}
@@ -349,8 +348,6 @@ html.lock{overflow:hidden}
 .tools{position:sticky;top:68px;z-index:20;background:var(--bg);margin:0 -28px 8px;padding:10px 28px 6px;display:flex;flex-direction:column;gap:10px}
 .tools .search{width:100%;max-width:460px}
 .tools .rail{margin:0;padding-bottom:4px}
-.big-l{display:none;margin-left:6px}
-@media(min-width:1100px){.big-l{display:inline}}
 /* notifikasi tidak lagi menutup total dan tombol checkout */
 #toasts{left:20px;right:auto;bottom:20px;justify-items:start}
 @media(max-width:860px){#toasts{left:12px;right:12px;top:76px;bottom:auto;justify-items:stretch}.toast{max-width:none}}
@@ -397,7 +394,6 @@ html.lock{overflow:hidden}
 .r-pay .btn.sm{background:#fff}
 
 /* ---- Layar masuk ---- */
-.btn.flat b{display:inline-grid;place-items:center;min-width:26px;height:22px;margin-right:4px;border-radius:6px;background:var(--blue-soft);color:var(--blue-text);font-size:.78rem}
 .auth-card .input::placeholder{color:#5b7391}
 
 /* ---- Ticker dan label harga di layar masuk ---- */
@@ -485,8 +481,6 @@ html.lock{overflow:hidden}
 .auth-card .input{padding:10px 14px}
 .auth-card .showpw{margin-bottom:12px}
 .auth-card .alt{margin-top:12px}
-.bigbtn{align-self:center}
-@media(min-width:861px){.bigbtn{position:absolute;top:18px;right:22px}}
 
 .pair{display:grid;grid-template-columns:1fr 1fr;column-gap:12px}
 @media(max-width:520px){.pair{grid-template-columns:1fr}}

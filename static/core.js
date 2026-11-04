@@ -26,7 +26,6 @@ export const NAV = [
 ];
 
 export const STORAGE_KEYS = {
-  bigText: 'tb_big',
   profile: 'tb_profile',
   cart: userId => 'tb_cart_' + userId
 };

@@ -113,7 +113,6 @@ function authArtHtml() {
 
 function authPanelHtml(tab) {
   const isLogin = tab === 'login';
-  const bigTextOn = document.documentElement.classList.contains('big');
   return `<section class="auth-panel"><div class="auth-card">
       <div class="switch-tabs" role="tablist">
         <button role="tab" class="${isLogin ? 'active' : ''}" data-act="auth-tab" data-tab="login">Masuk</button>
@@ -122,7 +121,6 @@ function authPanelHtml(tab) {
       ${isLogin ? loginFormHtml() : registerFormHtml()}
       <p class="alt muted">${isLogin ? 'Belum punya akun?' : 'Sudah punya akun?'} <button type="button" class="linkbtn" data-act="auth-tab" data-tab="${isLogin ? 'register' : 'login'}">${isLogin ? 'Daftar gratis' : 'Masuk'}</button></p>
     </div>
-    <button type="button" class="btn sm flat bigbtn" data-act="bigtext" aria-pressed="${bigTextOn}"><b aria-hidden="true">A+</b> Perbesar tulisan</button>
     </section>`;
 }
 
@@ -184,7 +182,6 @@ export function renderShell() {
   const user = state.user;
   const navItems = NAV.filter(item => item.roles.includes(user.role));
   const customer = isCustomer();
-  const bigTextOn = document.documentElement.classList.contains('big');
 
   $('#app').innerHTML = `
   <header class="top"><div class="top-in">
@@ -193,7 +190,6 @@ export function renderShell() {
     <div class="top-r">
       ${customer ? `<button class="btn cart-btn" data-act="open-cart">${icon('cart')}<span class="hide-m">Keranjang</span><span class="count num" id="cart-count">0</span></button>` : ''}
       <div class="who"><b>${escapeHtml(user.name)}</b><span class="tag ${user.role}">${ROLE_LABEL[user.role]}</span></div>
-      <button class="btn sm" data-act="bigtext" aria-label="Perbesar tulisan" title="Perbesar tulisan" aria-pressed="${bigTextOn}"><span aria-hidden="true">A+</span><span class="big-l" aria-hidden="true">Tulisan besar</span></button>
       <button class="btn sm" data-act="logout" aria-label="Keluar">${icon('out', 15)}<span>Keluar</span></button>
     </div>
   </div></header>

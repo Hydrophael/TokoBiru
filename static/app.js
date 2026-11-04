@@ -325,12 +325,6 @@ function deleteUser(el) {
   });
 }
 
-function toggleBigText() {
-  const on = document.documentElement.classList.toggle('big');
-  storage.set(STORAGE_KEYS.bigText, on);
-  $$('[data-act=bigtext]').forEach(button => button.setAttribute('aria-pressed', on));
-}
-
 function togglePasswordVisibility(checkbox) {
   $$('input[name=password],input[name=confirm]', checkbox.closest('form')).forEach(input => {
     input.type = checkbox.checked ? 'text' : 'password';
@@ -365,7 +359,6 @@ const actions = {
   'product-del':   deleteProduct,
   'user-new':      userModal,
   'user-del':      deleteUser,
-  bigtext:         toggleBigText,
   'toggle-pw':     togglePasswordVisibility,
   'refresh-page':  () => location.reload()
 };
@@ -621,7 +614,6 @@ function bindEvents() {
 
 async function boot() {
   bindEvents();
-  if (storage.get(STORAGE_KEYS.bigText)) document.documentElement.classList.add('big');
 
   try {
     const me = await api('/auth/me');
