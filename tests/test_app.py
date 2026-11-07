@@ -381,6 +381,28 @@ class TestRingkasan:
         db["master_product"].update_one({"_id": product["_id"]}, {"$set": {"stock": 2}})
         assert len(admin.get("/api/stats").get_json()["low_stock"]) == 1
 
+    def test_pendapatan_hari_ini_menurut_tanggal_bayar(self, customer, admin, product, db):
+        oid = customer.post("/api/orders", order_body(product)).get_json()["order"]["id"]
+        # pesanan dibuat dua hari lalu, tapi dibayar hari ini
+        db.orders.update_many({}, {"$set": {"created_at": tokobiru.utcnow() - tokobiru.timedelta(days=2)}})
+        admin.patch(f"/api/orders/{oid}/status", {"status": "paid"})
+        today = admin.get("/api/stats").get_json()["today"]
+        assert today["revenue"] == 65000
+        assert today["orders"] == 0
+
+    def test_pesanan_berjalan_tidak_tergeser_riwayat(self, customer, admin, product, db, monkeypatch):
+        monkeypatch.setattr(tokobiru, "ORDERS_LIMIT", 2)
+        oid = customer.post("/api/orders", order_body(product)).get_json()["order"]["id"]
+        admin.patch(f"/api/orders/{oid}/status", {"status": "paid"})
+        now = tokobiru.utcnow()
+        db.orders.update_many({}, {"$set": {"created_at": now - tokobiru.timedelta(days=30)}})
+        for i in range(5):   # riwayat selesai yang lebih baru dari pesanan dibayar tadi
+            db.orders.insert_one({"code": f"TB-RIWAYAT-{i}", "status": "completed", "items": [], "total": 0,
+                                  "user_id": product["_id"], "username": "x", "created_at": now - tokobiru.timedelta(minutes=i)})
+        statuses = [o["status"] for o in admin.get("/api/orders").get_json()["orders"]]
+        assert statuses.count("paid") == 1
+        assert statuses.count("completed") == 2
+
 
 # --------------------------------------------------------------------------- #
 # Manajemen pengguna (master)
@@ -434,6 +456,10 @@ class TestLog:
     def test_login_gagal_tercatat(self, anon, db, users):
         anon.login("admin", "salah12345")
         assert db.logs.count_documents({"action": "login_gagal"}) == 1
+
+    def test_login_gagal_tidak_menyimpan_teks_akun_tidak_dikenal(self, anon, db, users):
+        anon.login("rahasia99x", "apapun123")   # password yang salah diketik di kolom username
+        assert "rahasia99x" not in db.logs.find_one({"action": "login_gagal"})["detail"]
 
 
 class TestBootstrap:

@@ -102,6 +102,7 @@ TRANSITIONS = {
 # Pelanggan hanya boleh membatalkan pesanan yang belum dibayar dan menerima pesanan yang dikirim
 USER_TRANSITIONS = {("pending", "cancelled"), ("shipped", "completed")}
 REVENUE_STATUS = ("paid", "shipped", "completed")
+OPEN_STATUS = ("pending", "paid", "shipped")   # pesanan yang masih perlu ditangani staf
 MAX_CART_LINES = 30
 WIB_OFFSET = timedelta(hours=7)   # batas "hari ini" memakai waktu Indonesia Barat
 
@@ -132,7 +133,8 @@ LOW_STOCK_LIMIT = 5        # stok <= angka ini dianggap menipis
 LOW_STOCK_LIST_SIZE = 8
 RECENT_ORDERS_SIZE = 5
 PRODUCTS_LIMIT = 1000
-ORDERS_LIMIT = 200
+ORDERS_LIMIT = 200         # pesanan selesai/batal yang ditampilkan (dan batas daftar pesanan pelanggan)
+OPEN_ORDERS_LIMIT = 1000   # pengaman: pesanan berjalan hampir tidak pernah sebanyak ini
 USERS_LIMIT = 500
 LOGS_LIMIT = 150
 
@@ -192,6 +194,7 @@ def ensure_indexes(db):
     db.orders.create_index([("status", ASCENDING), ("created_at", ASCENDING)])
     # daftar pesanan staf, "pesanan terbaru" di dashboard, dan ringkasan hari ini hanya memakai created_at
     db.orders.create_index([("created_at", DESCENDING)])
+    db.orders.create_index([("paid_at", DESCENDING)])   # pendapatan hari ini
     # satu kunci idempotensi hanya boleh dipakai sekali per pelanggan (pesanan tanpa kunci tidak terkena)
     db.orders.create_index([("user_id", ASCENDING), ("idem_key", ASCENDING)], unique=True,
                            partialFilterExpression={"idem_key": {"$type": "string"}})
@@ -654,7 +657,8 @@ def auth_login():
     if user is None or not password_ok:
         if user:
             record_failed_login(db, user, now)
-        audit("login_gagal", f"identifier={identifier[:40]}")
+        # Teks di kolom username sering berisi password yang salah ketik, jadi hanya dicatat bila akunnya memang ada
+        audit("login_gagal", f"identifier={identifier[:40]}" if user else "akun tidak dikenal")
         raise ApiError("Username/email atau password salah", 401)
     if not user.get("active", True):
         raise ApiError("Akun Anda dinonaktifkan. Hubungi master.", 403)
@@ -1013,10 +1017,18 @@ def enforce_pending_limit(db, user):
 @app.get("/api/orders")
 @login_required
 def orders_list():
-    sweep_expired_orders(get_db())
+    db = get_db()
+    sweep_expired_orders(db)
     user = current_user()
-    query = {} if user["role"] in STAFF_ROLES else {"user_id": user["_id"]}
-    docs = get_db().orders.find(query).sort("created_at", -1).limit(ORDERS_LIMIT)
+    if user["role"] in STAFF_ROLES:
+        # Pesanan yang masih berjalan harus selalu tampil, sebesar apa pun riwayatnya; kalau tidak,
+        # pesanan yang sudah dibayar tapi belum dikirim bisa tergeser keluar dari 200 terbaru dan terlewat.
+        # Batas ORDERS_LIMIT hanya berlaku untuk pesanan yang sudah selesai atau dibatalkan.
+        open_orders = db.orders.find({"status": {"$in": list(OPEN_STATUS)}}).sort("created_at", -1).limit(OPEN_ORDERS_LIMIT)
+        closed_orders = db.orders.find({"status": {"$nin": list(OPEN_STATUS)}}).sort("created_at", -1).limit(ORDERS_LIMIT)
+        docs = sorted([*open_orders, *closed_orders], key=lambda o: o["created_at"], reverse=True)
+    else:
+        docs = db.orders.find({"user_id": user["_id"]}).sort("created_at", -1).limit(ORDERS_LIMIT)
     return jsonify({"orders": [serialize(o) for o in docs]})
 
 
@@ -1076,8 +1088,11 @@ def orders_status(order_id):
         raise ApiError("Pesanan tidak ditemukan", 404)
     current_status = order["status"]
     check_status_change(user, current_status, new_status)
-    result = db.orders.update_one({"_id": target_id, "status": current_status},
-                                  {"$set": {"status": new_status, "updated_at": utcnow()}})
+    now = utcnow()
+    changes = {"status": new_status, "updated_at": now}
+    if new_status == "paid":
+        changes["paid_at"] = now   # dasar penghitungan pendapatan harian
+    result = db.orders.update_one({"_id": target_id, "status": current_status}, {"$set": changes})
     if result.modified_count != 1:
         raise ApiError("Status pesanan sudah berubah. Muat ulang data.", 409)
     if new_status == "cancelled":
@@ -1104,11 +1119,17 @@ def order_summary(db):
 
 
 def today_summary(db):
-    """Pesanan masuk dan pendapatan (pesanan berstatus dibayar ke atas) sejak 00:00 WIB hari ini."""
+    """Pesanan masuk (menurut tanggal dibuat) dan pendapatan (menurut tanggal dibayar) sejak 00:00 WIB hari ini.
+
+    Pesanan lama yang dibayar sebelum `paid_at` ada tidak punya tanggal bayar; untuk mereka dipakai
+    tanggal dibuat seperti sebelumnya.
+    """
     local_now = utcnow() + WIB_OFFSET
     start = local_now.replace(hour=0, minute=0, second=0, microsecond=0) - WIB_OFFSET
     revenue = 0
-    pipeline = [{"$match": {"created_at": {"$gte": start}, "status": {"$in": list(REVENUE_STATUS)}}},
+    paid_today = {"$or": [{"paid_at": {"$gte": start}},
+                          {"paid_at": {"$exists": False}, "created_at": {"$gte": start}}]}
+    pipeline = [{"$match": {**paid_today, "status": {"$in": list(REVENUE_STATUS)}}},
                 {"$group": {"_id": None, "sum": {"$sum": "$total"}}}]
     for row in db.orders.aggregate(pipeline):
         revenue = row["sum"]
