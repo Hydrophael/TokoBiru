@@ -69,6 +69,11 @@ const loginFormHtml = () => `
       <button class="btn primary block" type="submit">Masuk</button>
     </form>`;
 
+// Tautan hanya muncul bila server sudah dikonfigurasi untuk mengirim email
+const forgotLinkHtml = () => state.resetEnabled
+  ? '<p class="alt"><button type="button" class="linkbtn" data-act="forgot-open">Lupa password?</button></p>'
+  : '';
+
 const registerFormHtml = () => `
     <h2>Buat akun</h2><p class="muted">Daftar sebagai pelanggan, gratis.</p>
     <form data-form="register" novalidate>
@@ -125,7 +130,7 @@ function authTabsHtml(tab) {
 
 function authFormAreaHtml(tab) {
   const isLogin = tab === 'login';
-  return `${isLogin ? loginFormHtml() : registerFormHtml()}
+  return `${isLogin ? loginFormHtml() + forgotLinkHtml() : registerFormHtml()}
       <p class="alt muted">${isLogin ? 'Belum punya akun?' : 'Sudah punya akun?'} <button type="button" class="linkbtn" data-act="auth-tab" data-tab="${isLogin ? 'register' : 'login'}">${isLogin ? 'Daftar gratis' : 'Masuk'}</button></p>`;
 }
 
@@ -765,6 +770,30 @@ export function passwordModal() {
       <div class="field"><label>Password baru</label><input class="input" name="new_password" data-pw type="password" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="Minimal 8 karakter"></div>
       <div class="field"><label>Ulangi password baru</label><input class="input" name="confirm" data-pw type="password" required autocomplete="new-password"></div>
       <p class="muted small" style="margin:-2px 0 10px">Minimal 8 karakter, berisi huruf dan angka.</p>
+      <label class="showpw"><input type="checkbox" data-act="toggle-pw"> Tampilkan password</label>
+      <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Ganti password</button></div></form>`);
+}
+
+// Angka ini sama dengan RESET_CODE_MINUTES dan RESET_COOLDOWN_SECONDS di app.py
+const RESET_CODE_MINUTES = 15;
+const RESET_RETRY_MINUTES = 2;
+
+export function forgotModal() {
+  openModal(`<h3>Lupa password</h3><p class="sub">Masukkan email akun Anda. Kami kirim kode 6 angka untuk membuat password baru.</p>
+    <form data-form="forgot" novalidate><div class="form-alert" role="alert"></div>
+      <div class="field"><label>Email</label><input class="input" name="email" type="email" required maxlength="120" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="nama@email.com"></div>
+      <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Kirim kode</button></div></form>`);
+}
+
+export function resetModal(email) {
+  // input tersembunyi sengaja di bawah: kolom pertama di modal otomatis mendapat fokus
+  openModal(`<h3>Masukkan kode</h3><p class="sub">Jika ${escapeHtml(email)} terdaftar, kode 6 angka sudah dikirim dan berlaku ${RESET_CODE_MINUTES} menit. Cek juga folder spam.</p>
+    <form data-form="reset" novalidate><div class="form-alert" role="alert"></div>
+      <div class="field"><label>Kode 6 angka</label><input class="input num" name="code" inputmode="numeric" autocomplete="one-time-code" required maxlength="6" placeholder="123456"></div>
+      <div class="field"><label>Password baru</label><input class="input" name="new_password" data-pw type="password" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="Minimal 8 karakter"></div>
+      <div class="field"><label>Ulangi password baru</label><input class="input" name="confirm" data-pw type="password" required autocomplete="new-password"></div>
+      <input type="hidden" name="email" value="${escapeHtml(email)}">
+      <p class="muted small" style="margin:-2px 0 10px">Minimal 8 karakter, berisi huruf dan angka. Belum menerima kode? Tutup, lalu minta lagi setelah ${RESET_RETRY_MINUTES} menit.</p>
       <label class="showpw"><input type="checkbox" data-act="toggle-pw"> Tampilkan password</label>
       <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Ganti password</button></div></form>`);
 }

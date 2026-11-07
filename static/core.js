@@ -77,6 +77,7 @@ export const state = {
   user: null,
   csrf: '',
   payInfo: '',
+  resetEnabled: false,   // true bila server bisa mengirim kode reset password lewat email
   view: 'shop',
   authTab: 'login',
 

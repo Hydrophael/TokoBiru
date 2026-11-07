@@ -22,22 +22,29 @@ Environment variable
     PAY_INFO      opsional: instruksi pembayaran yang tampil di pesanan pelanggan
     PENDING_TTL_HOURS  opsional: batas jam bayar sebelum pesanan dibatalkan otomatis (default 24)
     MAX_PENDING_ORDERS opsional: jumlah pesanan belum dibayar yang boleh dimiliki satu pelanggan (default 3)
+    SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD / SMTP_FROM
+                  opsional: server email untuk kode reset password (port 587 STARTTLS, atau 465 SSL).
+                  Tanpa SMTP_HOST dan pengirim (SMTP_FROM atau SMTP_USER), tombol "Lupa password" tidak tampil.
     Variabel yang dibiarkan kosong diperlakukan sama seperti tidak diisi (memakai nilai bawaan).
 """
 import getpass
+import hashlib
+import hmac
 import os
 import re
 import secrets
+import smtplib
 import sys
 import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from functools import wraps
 
 from bson import ObjectId
 from flask import (Flask, Response, g, has_request_context, jsonify, request,
                    send_from_directory, session)
-from pymongo import ASCENDING, DESCENDING, MongoClient
+from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -127,6 +134,20 @@ MAX_FAILED_LOGIN = 5
 LOCK_MINUTES = 10
 PASSWORD_MIN_LEN = 8
 PASSWORD_MAX_LEN = 128
+
+# Reset password lewat kode 6 angka yang dikirim ke email. Aktif hanya bila server SMTP dan pengirim diisi.
+SMTP_HOST = _env_str("SMTP_HOST")
+SMTP_PORT = _env_int("SMTP_PORT", 587)
+SMTP_USER = _env_str("SMTP_USER")
+SMTP_PASSWORD = _env_str("SMTP_PASSWORD", strip=False)
+SMTP_FROM = _env_str("SMTP_FROM", SMTP_USER)
+SMTP_TIMEOUT = 8            # detik; fungsi serverless tidak boleh menunggu server email terlalu lama
+EMAIL_ENABLED = bool(SMTP_HOST and SMTP_FROM)
+RESET_CODE_LENGTH = 6
+RESET_CODE_MINUTES = 15     # masa berlaku kode (frontend menyebut angka yang sama di views.js)
+RESET_COOLDOWN_SECONDS = 120   # jeda minimum antar permintaan kode per akun (frontend: "2 menit")
+MAX_RESET_ATTEMPTS = 5      # tebakan kode yang boleh salah sebelum reset dikunci (terpisah dari kunci login)
+RESET_LOCK_MINUTES = 10
 
 # Batas jumlah data yang dikirim ke frontend
 LOW_STOCK_LIMIT = 5        # stok <= angka ini dianggap menipis
@@ -285,6 +306,9 @@ PHONE_ERROR = "Isi nomor HP yang benar, contoh 081234567890"
 NAME_ERROR = "Nama hanya boleh huruf, angka, spasi, titik, koma, apostrof, strip"
 USERNAME_ERROR = "Username 3-20 karakter: huruf kecil, angka, underscore"
 EMAIL_ERROR = "Format email tidak valid"
+RESET_CODE_RE = re.compile(r"\d{6}")
+RESET_CODE_ERROR = "Kode terdiri dari 6 angka"
+RESET_FAILED_ERROR = "Kode salah atau sudah kedaluwarsa. Minta kode baru bila perlu."
 
 
 def sanitize(value, multiline=False):
@@ -413,7 +437,8 @@ def object_id(value, label="ID"):
 # --------------------------------------------------------------------------- #
 # Serialisasi (dokumen Mongo -> JSON)
 # --------------------------------------------------------------------------- #
-HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key", "session_version")
+HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key", "session_version",
+                 "reset_code_hash", "reset_expires", "reset_sent_at", "reset_failed", "reset_locked_until")
 
 
 def serialize_value(value):
@@ -619,7 +644,8 @@ def auth_me():
     user = current_user()   # bisa membersihkan sesi (akun nonaktif / sesi dicabut), jadi dipanggil sebelum membuat csrf
     if "csrf" not in session:
         session["csrf"] = secrets.token_urlsafe(32)
-    return jsonify({"user": public_user(user), "csrf": session["csrf"], "pay_info": PAY_INFO})
+    return jsonify({"user": public_user(user), "csrf": session["csrf"], "pay_info": PAY_INFO,
+                    "reset_enabled": EMAIL_ENABLED})
 
 
 @app.post("/api/auth/register")
@@ -707,6 +733,144 @@ def auth_password():
     session["sv"] = db.users.find_one({"_id": user["_id"]}).get("session_version", 1)
     audit("password_ubah", "")
     return jsonify({"ok": True})
+
+
+# --- Lupa password: kode 6 angka lewat email -------------------------------------------------- #
+RESET_FIELDS = {"reset_code_hash": "", "reset_expires": "", "reset_sent_at": ""}   # untuk $unset
+# Penghitung tebakan sengaja TIDAK ikut RESET_FIELDS: gagal kirim email tidak boleh menghapus kunci.
+# Hanya dibersihkan saat reset berhasil.
+RESET_GUARD_FIELDS = {"reset_failed": "", "reset_locked_until": ""}
+
+
+def send_email(to, subject, body):
+    """Kirim email teks lewat SMTP. Dipisah dari route supaya mudah diganti di tes."""
+    message = EmailMessage()
+    message["From"] = SMTP_FROM
+    message["To"] = to
+    message["Subject"] = subject
+    message.set_content(body)
+    use_ssl = SMTP_PORT == 465
+    server = (smtplib.SMTP_SSL if use_ssl else smtplib.SMTP)(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT)
+    with server:
+        if not use_ssl:
+            server.starttls()
+        if SMTP_USER:
+            server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(message)
+
+
+def new_reset_code():
+    return f"{secrets.randbelow(10 ** RESET_CODE_LENGTH):0{RESET_CODE_LENGTH}d}"
+
+
+def reset_code_digest(user_id, code):
+    """Kode disimpan sebagai HMAC (terikat ke akun), bukan teks asli."""
+    return hmac.new(SECRET_KEY.encode(), f"{user_id}:{code}".encode(), hashlib.sha256).hexdigest()
+
+
+def lock_reset(db, user, now):
+    db.users.update_one({"_id": user["_id"]}, {"$set": {
+        "reset_failed": 0, "reset_locked_until": now + timedelta(minutes=RESET_LOCK_MINUTES)}})
+
+
+def reset_locked_error():
+    return ApiError(
+        f"Terlalu banyak tebakan kode. Coba lagi dalam {RESET_LOCK_MINUTES} menit.", 429)
+
+
+def require_email_enabled():
+    if not EMAIL_ENABLED:
+        raise ApiError("Pemulihan password lewat email belum diaktifkan di toko ini.", 503)
+
+
+@app.post("/api/auth/forgot")
+def auth_forgot():
+    """Kirim kode reset ke email akun. Jawabannya selalu sama, terdaftar atau tidak, agar daftar akun tidak bisa ditebak."""
+    require_email_enabled()
+    form = Form(json_body())
+    form.text("email", "Email", 5, 120, lower=True, regex=EMAIL_RE, regex_msg=EMAIL_ERROR)
+    email = form.done()["email"]
+    db = get_db()
+    user = db.users.find_one({"email": email})
+    now = utcnow()
+    sent_at = user.get("reset_sent_at") if user else None
+    cooling_down = bool(sent_at) and (now - sent_at).total_seconds() < RESET_COOLDOWN_SECONDS
+    if user and user.get("active", True) and not cooling_down:
+        code = new_reset_code()
+        db.users.update_one({"_id": user["_id"]}, {"$set": {
+            "reset_code_hash": reset_code_digest(user["_id"], code),
+            "reset_expires": now + timedelta(minutes=RESET_CODE_MINUTES),
+            "reset_sent_at": now}})
+        try:
+            send_email(
+                user["email"], "Kode reset password TokoBiru",
+                f"Kode reset password TokoBiru Anda: {code}\n\n"
+                f"Kode berlaku {RESET_CODE_MINUTES} menit dan hanya bisa dipakai sekali.\n"
+                "Jika Anda tidak merasa memintanya, abaikan email ini; password Anda tidak berubah.\n")
+        except Exception as exc:   # smtplib punya banyak jenis error; apa pun yang terjadi, kode tidak jadi dipakai
+            app.logger.error("Gagal mengirim email reset password: %s", exc)
+            db.users.update_one({"_id": user["_id"]}, {"$unset": RESET_FIELDS})   # boleh langsung coba lagi
+        else:
+            audit("reset_minta", "kode dikirim ke email", user)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/auth/reset")
+def auth_reset():
+    """Ganti password memakai kode dari email. Kode sekali pakai.
+
+    Tebakan kode punya penghitung sendiri (reset_failed / reset_locked_until), terpisah dari kunci login:
+    akun yang terkunci karena salah login tetap bisa direset dengan kode benar, dan tebakan kode salah
+    tidak ikut mengunci login pemilik akun."""
+    require_email_enabled()
+    form = Form(json_body())
+    form.text("email", "Email", 5, 120, lower=True, regex=EMAIL_RE, regex_msg=EMAIL_ERROR)
+    form.text("code", "Kode", RESET_CODE_LENGTH, RESET_CODE_LENGTH, regex=RESET_CODE_RE, regex_msg=RESET_CODE_ERROR)
+    form.password("new_password", "Password baru")
+    clean = form.done()   # kode tidak disentuh bila isian tidak valid, jadi bisa dipakai lagi setelah diperbaiki
+    db = get_db()
+    user = db.users.find_one({"email": clean["email"]})
+    now = utcnow()
+    # Hanya akun dengan kode yang sedang berlaku yang punya sesuatu untuk ditebak
+    pending = bool(user and user.get("active", True) and user.get("reset_code_hash")
+                   and user.get("reset_expires") and user["reset_expires"] > now)
+    if pending:
+        # Jatah tebakan diambil secara atomik SEBELUM kode dicocokkan. Request yang datang bersamaan
+        # tidak bisa sama-sama membaca hitungan lama lalu menebak tanpa terhitung.
+        attempt = db.users.find_one_and_update(
+            {"_id": user["_id"], "reset_expires": {"$gt": now}, "reset_code_hash": {"$exists": True},
+             "$or": [{"reset_locked_until": {"$exists": False}}, {"reset_locked_until": None},
+                     {"reset_locked_until": {"$lte": now}}]},
+            {"$inc": {"reset_failed": 1}},
+            return_document=ReturnDocument.AFTER)
+        locked_until = user.get("reset_locked_until")
+        if attempt is None:
+            if locked_until and locked_until > now:
+                raise reset_locked_error()
+            raise ApiError(RESET_FAILED_ERROR, 422, {"code": "Kode salah atau sudah kedaluwarsa"})
+        tries = attempt.get("reset_failed", 1)
+        if tries > MAX_RESET_ATTEMPTS:
+            # Tebakan beruntun yang lolos sebelum kunci terpasang tidak dicocokkan. Kunci dipasang lagi di sini
+            # (idempoten) supaya penghitung tidak pernah menggantung di atas batas tanpa kunci.
+            lock_reset(db, user, now)
+            raise reset_locked_error()
+        # Kode dicocokkan di filter update (bukan di Python), jadi dua request bersamaan tidak bisa memakai kode yang sama
+        result = db.users.update_one(
+            {"_id": user["_id"], "reset_code_hash": reset_code_digest(user["_id"], clean["code"])},
+            {"$set": {"password_hash": generate_password_hash(clean["new_password"]),
+                      "failed": 0, "locked_until": None},
+             "$inc": {"session_version": 1},   # semua sesi lama, di perangkat mana pun, tidak berlaku lagi
+             "$unset": {**RESET_FIELDS, **RESET_GUARD_FIELDS}})
+        if result.modified_count == 1:
+            audit("password_reset", "lewat kode email", user)
+            return jsonify({"ok": True})
+        if tries >= MAX_RESET_ATTEMPTS:
+            lock_reset(db, user, now)
+            audit("reset_gagal", "kode salah, reset dikunci sementara", user)
+            raise reset_locked_error()
+        audit("reset_gagal", "kode salah", user)
+    # Pesan sama untuk email tak dikenal, tanpa kode aktif, kode salah, dan kode kedaluwarsa
+    raise ApiError(RESET_FAILED_ERROR, 422, {"code": "Kode salah atau sudah kedaluwarsa"})
 
 
 # --------------------------------------------------------------------------- #

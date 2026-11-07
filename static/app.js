@@ -41,6 +41,7 @@ import {
   cartTotal,
   categoryRailHtml,
   drawCart,
+  forgotModal,
   orderCards,
   orderRailHtml,
   passwordModal,
@@ -49,6 +50,7 @@ import {
   renderAuth,
   renderList,
   renderShell,
+  resetModal,
   setCartQty,
   showOrderSuccess,
   userModal,
@@ -389,6 +391,7 @@ const actions = {
   'product-del':   deleteProduct,
   'user-new':      userModal,
   'change-password': passwordModal,
+  'forgot-open':   forgotModal,
   'user-del':      deleteUser,
   'toggle-pw':     togglePasswordVisibility,
   'refresh-page':  () => location.reload()
@@ -484,6 +487,24 @@ const formHandlers = {
     });
     closeModal();
     toast('Password diganti. Perangkat lain perlu masuk lagi.', 'ok');
+  },
+
+  async forgot(form, data) {
+    const email = String(data.email || '').trim().toLowerCase();
+    await api('/auth/forgot', { method: 'POST', body: { email } });
+    resetModal(email);   // ganti isi modal; jawaban server sama untuk email terdaftar maupun tidak
+  },
+
+  async reset(form, data) {
+    if (data.new_password !== data.confirm) {
+      throw validationError({ confirm: 'Konfirmasi password tidak sama' });
+    }
+    await api('/auth/reset', {
+      method: 'POST',
+      body: { email: data.email, code: String(data.code || '').trim(), new_password: data.new_password }
+    });
+    closeModal();
+    toast('Password diganti. Silakan masuk dengan password baru.', 'ok');
   },
 
   async 'user-create'(form, data) {
@@ -696,6 +717,7 @@ async function boot() {
     const me = await api('/auth/me');
     state.csrf = me.csrf;
     state.payInfo = me.pay_info || '';
+    state.resetEnabled = Boolean(me.reset_enabled);
 
     if (me.user) {
       state.user = me.user;
