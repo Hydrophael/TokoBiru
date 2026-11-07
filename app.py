@@ -800,6 +800,26 @@ def parse_cart_items(items):
     return wanted
 
 
+def parse_expected_prices(items):
+    """Harga per produk yang dilihat pelanggan saat checkout -> {ObjectId: harga}.
+
+    Opsional: baris tanpa `price` (klien lama) tidak diperiksa. Dipanggil setelah parse_cart_items,
+    jadi `items` dan `product_id` di dalamnya sudah tervalidasi.
+    """
+    expected = {}
+    for item in items:
+        if item.get("price") is None:
+            continue
+        form = Form(item)
+        form.integer("price", "Harga", 1, 100_000_000)
+        expected[ObjectId(item["product_id"])] = form.done()["price"]
+    return expected
+
+
+def format_rupiah(amount):
+    return "Rp" + f"{amount:,}".replace(",", ".")
+
+
 def release_stock(db, reserved):
     """Kembalikan stok. `reserved` berisi pasangan (product_id, jumlah)."""
     for product_id, qty in reserved:
@@ -841,10 +861,12 @@ def sweep_expired_orders(db, force=False):
     return cancelled
 
 
-def reserve_stock(db, wanted):
+def reserve_stock(db, wanted, expected_prices=None):
     """Kurangi stok tiap produk secara atomik dan kembalikan (reserved, baris pesanan).
 
-    Bila satu produk gagal, stok produk lain yang sudah dikurangi dikembalikan.
+    Bila satu produk gagal, stok produk lain yang sudah dikurangi dikembalikan. Bila `expected_prices`
+    diberikan, pesanan ditolak (409) untuk produk yang harganya sudah berbeda dari yang dilihat pelanggan;
+    harga yang tercatat di pesanan selalu harga yang sama dengan yang diperiksa di sini.
     """
     reserved, lines = [], []
     try:
@@ -852,6 +874,12 @@ def reserve_stock(db, wanted):
             product = db[PRODUCT_COLLECTION].find_one({"_id": product_id})
             if not product:
                 raise ApiError("Ada produk yang sudah tidak tersedia", 404)
+            seen_price = (expected_prices or {}).get(product_id)
+            if seen_price is not None and seen_price != product["price"]:
+                raise ApiError(
+                    f"Harga '{product['name']}' berubah dari {format_rupiah(seen_price)} menjadi "
+                    f"{format_rupiah(product['price'])}. Keranjang sudah diperbarui, periksa lagi sebelum memesan.",
+                    409)
             # Pengurangan stok atomik: hanya berhasil jika stok cukup
             result = db[PRODUCT_COLLECTION].update_one(
                 {"_id": product_id, "stock": {"$gte": qty}}, {"$inc": {"stock": -qty}})
@@ -968,6 +996,7 @@ def orders_create():
     form.text("note", "Catatan", 0, 200, required=False, multiline=True)
     clean = form.done()
     wanted = parse_cart_items(data.get("items"))
+    expected_prices = parse_expected_prices(data["items"])
     key = idempotency_key()
 
     db = get_db()
@@ -977,7 +1006,7 @@ def orders_create():
         return jsonify({"order": serialize(previous), "replayed": True}), 200
     sweep_expired_orders(db)   # lepaskan stok pesanan kedaluwarsa sebelum menghitung ketersediaan
     enforce_pending_limit(db, user)
-    reserved, lines = reserve_stock(db, wanted)
+    reserved, lines = reserve_stock(db, wanted, expected_prices)
     try:
         now = utcnow()
         order = {"user_id": user["_id"], "username": user["username"],

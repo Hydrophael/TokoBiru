@@ -292,8 +292,12 @@ class TestPesanan:
         assert db["master_product"].find_one({"_id": product["_id"]})["stock"] == 7
 
     def test_harga_diambil_dari_server(self, customer, product):
+    # harga dari klien tidak pernah dipakai: yang berbeda dari database ditolak, bukan dicatat
         body = order_body(product, 1)
         body["items"][0]["price"] = 1
+        assert customer.post("/api/orders", body).status_code == 409
+
+        body["items"][0]["price"] = 65000
         assert customer.post("/api/orders", body).get_json()["order"]["total"] == 65000
 
     def test_stok_tidak_cukup(self, customer, product, db):

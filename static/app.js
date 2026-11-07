@@ -434,7 +434,7 @@ function checkoutKey(items) {
   return state.checkout.key;
 }
 
-// Stok berubah sejak katalog dimuat: tutup form, muat ulang katalog, dan tampilkan keranjang yang sudah disesuaikan
+// Stok atau harga berubah sejak katalog dimuat: tutup form, muat ulang katalog, dan tampilkan keranjang yang sudah disesuaikan
 async function refreshAfterStockConflict(err) {
   closeModal();
   toast(err.message, 'err');
@@ -486,7 +486,8 @@ const formHandlers = {
     const address = data.address.trim();
     storage.set(STORAGE_KEYS.profile(state.user.id), { phone, address });
 
-    const items = cartLines().map(line => ({ product_id: line.product.id, qty: line.qty }));
+    // harga ikut dikirim: server menolak (409) bila harga di katalog sudah berubah dari yang dilihat pelanggan
+    const items = cartLines().map(line => ({ product_id: line.product.id, qty: line.qty, price: line.product.price }));
     let result;
     try {
       result = await api('/orders', {
@@ -495,7 +496,7 @@ const formHandlers = {
         headers: { 'Idempotency-Key': checkoutKey(items) }
       });
     } catch (err) {
-      // 409: stok tidak cukup, 404: produk sudah dihapus. Katalog di layar sudah basi.
+      // 409: stok tidak cukup atau harga berubah, 404: produk sudah dihapus. Katalog di layar sudah basi.
       if (err.status === 409 || err.status === 404) return refreshAfterStockConflict(err);
       throw err;
     }
