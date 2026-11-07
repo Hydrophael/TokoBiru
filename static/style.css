@@ -117,7 +117,7 @@ textarea.input{resize:vertical;min-height:88px}
 .top{position:sticky;top:0;z-index:30;background:var(--surface);border-bottom:1px solid var(--line);box-shadow:0 1px 0 rgba(12,35,66,.03),0 6px 20px rgba(12,35,66,.05)}
 .top-in{max-width:1240px;margin:0 auto;padding:0 28px;display:flex;align-items:center;gap:24px;min-height:68px}
 .top .brand{color:var(--ink)}
-.nav{display:flex;align-items:center;gap:4px;flex:1;overflow-x:auto;scrollbar-width:none}
+.nav{position:relative;display:flex;align-items:center;gap:4px;flex:1;overflow-x:auto;scrollbar-width:none}
 .nav::-webkit-scrollbar{display:none}
 .nav button{border:0;background:transparent;padding:0 16px;min-height:44px;font-weight:600;font-size:1rem;color:var(--ink2);cursor:pointer;white-space:nowrap;border-radius:var(--r-sm);transition:background .15s,color .15s}
 .nav button:hover{color:var(--ink);background:var(--bg-soft)}
@@ -128,8 +128,8 @@ textarea.input{resize:vertical;min-height:88px}
 .cart-btn .count{background:var(--blue);color:var(--on-blue);font-size:.78rem;min-width:24px;height:24px;border-radius:12px;display:grid;place-items:center;padding:0 7px;font-weight:700}
 .cart-btn .count.bump{animation:bump .35s var(--ease)}
 .wrap{max-width:1240px;margin:0 auto;padding:34px 28px 80px}
-#content>*{animation:rise .4s var(--ease) both}
-#content>*:nth-child(2){animation-delay:.05s} #content>*:nth-child(3){animation-delay:.1s}
+#content.fresh>*{animation:rise .45s var(--ease) both}
+#content.fresh>*:nth-child(2){animation-delay:.06s} #content.fresh>*:nth-child(3){animation-delay:.12s} #content.fresh>*:nth-child(4){animation-delay:.18s}
 .page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:24px;flex-wrap:wrap}
 .page-head h2{font-size:2.3rem} .page-head p{margin-top:6px;max-width:52ch}
 .search{display:flex;align-items:center;gap:8px;background:var(--surface);border:1.5px solid var(--field);border-radius:var(--r-sm);padding:0 14px;min-width:260px;transition:border-color .15s,box-shadow .15s;color:var(--muted)}
@@ -527,3 +527,71 @@ html.lock{overflow:hidden}
   .drawer-head{position:relative;padding-top:28px;touch-action:none}
   .drawer-head::before{content:'';position:absolute;top:10px;left:50%;width:44px;height:5px;margin-left:-22px;border-radius:3px;background:var(--line-strong)}
 }
+
+/* ---- Peralihan Masuk / Daftar: penanda tab bergeser ---- */
+.switch-tabs{position:relative}
+.switch-tabs::before{content:'';position:absolute;top:3px;bottom:3px;left:3px;width:calc((100% - 10px)/2);border-radius:10px;background:var(--blue);box-shadow:0 2px 8px rgba(11,95,196,.3);transition:transform .32s var(--ease)}
+.switch-tabs[data-tab=register]::before{transform:translateX(calc(100% + 4px))}
+.switch-tabs button{position:relative;z-index:1}
+.switch-tabs button.active{background:transparent;box-shadow:none}
+
+/* ---- Jarak formulir masuk/daftar lebih lega + kursor tangan pada kotak centang ---- */
+.auth-card h2{margin-bottom:4px}
+.auth-swap>h2+p{margin-bottom:20px}
+.auth-card .field{gap:6px;margin-bottom:16px}
+.auth-card .input{padding:11px 14px}
+.auth-card .showpw{margin:4px 0 18px}
+.auth-card #r-pw-hint{margin:-6px 0 14px!important}
+.auth-card .alt{margin-top:18px}
+.switch-tabs{margin-bottom:24px}
+.showpw input{cursor:pointer}
+/* penanda tab sedikit memantul saat berpindah */
+.switch-tabs::before{transition:transform .3s cubic-bezier(.3,1.15,.5,1)}
+
+/* ======================= Sistem gerak aplikasi =======================
+   Gerak hanya menjawab aksi pengguna dan mati bila perangkat meminta gerak dikurangi. */
+@keyframes dropin{from{opacity:0;transform:translateY(-14px)}}
+@keyframes fadeout{to{opacity:0}}
+@keyframes popout{to{opacity:0;transform:translateY(10px) scale(.97)}}
+@keyframes sheetout{to{opacity:.4;transform:translateY(60px)}}
+
+/* header muncul turun saat masuk; setelah itu tidak digambar ulang */
+.top{animation:dropin .5s var(--ease) backwards}
+
+/* penanda menu meluncur antar tombol */
+.nav-ind{position:absolute;left:0;top:0;width:var(--w,0);height:var(--h,0);transform:translate(var(--x,0),var(--y,0));border-radius:var(--r-sm);
+  background:var(--blue-soft);box-shadow:inset 0 -3px 0 var(--accent);opacity:0;pointer-events:none}
+.nav.ready .nav-ind{opacity:1;transition:transform .5s cubic-bezier(.34,1.3,.5,1),width .4s var(--ease),height .4s var(--ease)}
+.nav button{position:relative;z-index:1}
+.nav button.active,.nav button.active:hover{background:transparent;box-shadow:none}
+
+/* kartu dan baris masuk bergantian saat halaman dibuka */
+.receipts.stagger>.receipt{animation:pop .42s var(--ease) backwards;animation-delay:calc(var(--i,0)*50ms)}
+.tbl-wrap.stagger tbody tr{animation:rise .4s var(--ease) backwards;animation-delay:calc(var(--i,0)*32ms)}
+#content.fresh .fact{animation:pop .45s var(--ease) backwards}
+#content.fresh .fact:nth-child(2){animation-delay:.06s} #content.fresh .fact:nth-child(3){animation-delay:.12s}
+#content.fresh .fact:nth-child(4){animation-delay:.18s} #content.fresh .fact:nth-child(5){animation-delay:.24s}
+
+/* modal menutup dengan halus */
+.overlay.leaving{animation:fadeout .16s ease forwards;pointer-events:none}
+.overlay.leaving .modal{animation:popout .16s ease forwards}
+@media(max-width:600px){.overlay.leaving .modal{animation:sheetout .16s ease forwards}}
+
+/* ---- Halaman masuk: urutan gerak saat pertama tampil ----
+   merek -> judul (dua baris naik bergantian) -> paragraf -> label harga -> ticker; kartu formulir menyusul */
+@keyframes slidein{from{opacity:0;transform:translateX(-18px)}}
+@keyframes lineup{from{transform:translateY(108%)}}
+@keyframes ringin{from{opacity:0;transform:scale(.82)}}
+@keyframes tagrise{from{opacity:0;transform:translateY(22px) scale(.96)}}
+.art-body{animation:none}
+.auth-art>.brand{animation:slidein .7s var(--ease) backwards}
+.art-body h1 .ln{display:block;overflow:hidden;padding-bottom:.16em;margin-bottom:-.16em}
+.art-body h1 .ln>span{display:block;animation:lineup .95s var(--ease) backwards}
+.art-body h1 .ln:nth-child(1)>span{animation-delay:.18s}
+.art-body h1 .ln:nth-child(2)>span{animation-delay:.32s}
+.art-body>p{animation:rise .85s var(--ease) .55s backwards}
+.pricetag{animation:tagrise .9s var(--ease) .8s backwards}
+.ticker{animation:fade 1.1s ease 1.05s backwards}
+.auth-art::before{animation:fade 1.8s ease .2s backwards}
+.auth-art::after{animation:ringin 1.8s var(--ease) .1s backwards}
+.auth-card{animation:pop .7s var(--ease) .25s backwards}

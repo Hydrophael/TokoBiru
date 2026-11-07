@@ -27,8 +27,10 @@ import {
   closeModal,
   confirmAccepted,
   confirmDialog,
+  EASE,
   flyToCart,
   openModal,
+  reducedMotion,
   toast,
   withTransition
 } from './ui.js';
@@ -72,10 +74,18 @@ async function loadProducts() {
   const result = await api('/products');
   state.products = result.products;
   state.categories = result.categories;
+  state.productsTotal = result.total ?? result.products.length;
   state.productMap = Object.fromEntries(result.products.map(p => [p.id, p]));
 
-  // Buang isi keranjang yang produknya sudah tidak ada
-  Object.keys(state.cart).forEach(id => { if (!state.productMap[id]) delete state.cart[id]; });
+  // Sesuaikan keranjang dengan katalog terbaru: buang produk yang hilang atau habis, batasi jumlah ke stok
+  let adjusted = 0;
+  Object.keys(state.cart).forEach(id => {
+    const product = state.productMap[id];
+    if (!product) { delete state.cart[id]; return; }
+    if (product.stock === 0) { delete state.cart[id]; adjusted++; return; }
+    if (state.cart[id] > product.stock) { state.cart[id] = product.stock; adjusted++; }
+  });
+  if (adjusted) toast(`${adjusted} barang di keranjang disesuaikan dengan stok terbaru`);
 }
 
 const loaders = {
@@ -93,6 +103,7 @@ async function show(view) {
 
   state.view = view;
   state.query = '';
+  state.fresh = true;
   renderShell();
   window.scrollTo(0, 0);
   await reload();
@@ -101,12 +112,17 @@ async function show(view) {
 async function reload() {
   try {
     await loaders[state.view]();
-    $('#content').innerHTML = views[state.view]();
-    if (state.view === 'dashboard') animateDashboard($('#content'));
+    const content = $('#content');
+    content.classList.toggle('fresh', state.fresh);   // animasi masuk hanya saat halaman baru dibuka
+    content.innerHTML = views[state.view]();
+    if (state.view === 'dashboard') animateDashboard(content);
     if (isCustomer()) drawCart();
+    if (state.fresh) setTimeout(() => $$('#content .stagger').forEach(el => el.classList.remove('stagger')), 1200);
   } catch (err) {
     if (err.status === 401) return; // sesi berakhir sudah ditangani di api()
     $('#content').innerHTML = `<div class="empty"><b>Data belum bisa dimuat</b><p>${escapeHtml(err.message)}</p><button class="btn" data-act="reload">Coba lagi</button></div>`;
+  } finally {
+    state.fresh = false;
   }
 }
 
@@ -129,6 +145,15 @@ function openCart() {
   $('#drawer').classList.add('open');
   $('#scrim').classList.add('open');
   document.documentElement.classList.add('lock');
+
+  // isi keranjang masuk bergantian setelah laci terbuka
+  if (!reducedMotion.matches) {
+    $$('#cart-items .citem').slice(0, 8).forEach((el, index) => el.animate(
+      [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }],
+      { duration: 380, delay: 140 + index * 45, easing: EASE, fill: 'backwards' }
+    ));
+  }
+
   const closeButton = $('#drawer .drawer-head button');
   if (closeButton) closeButton.focus();
 }
@@ -439,7 +464,7 @@ const formHandlers = {
     const items = cartLines().map(line => ({ product_id: line.product.id, qty: line.qty }));
     const result = await api('/orders', {
       method: 'POST',
-      body: { items, address: `${address} (HP/WA: ${phone})`, note: data.note }
+      body: { items, phone, address, note: data.note }
     });
 
     state.cart = {};

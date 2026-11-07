@@ -19,18 +19,21 @@ Environment variable
     MASTER_USERNAME / MASTER_EMAIL / MASTER_PASSWORD / MASTER_NAME
                   opsional: membuat akun master otomatis bila belum ada master
     PAY_INFO      opsional: instruksi pembayaran yang tampil di pesanan pelanggan
+    PENDING_TTL_HOURS  opsional: batas jam bayar sebelum pesanan dibatalkan otomatis (default 24)
 """
 import getpass
 import os
 import re
 import secrets
 import sys
+import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 from bson import ObjectId
-from flask import Flask, Response, g, jsonify, request, send_from_directory, session
+from flask import (Flask, Response, g, has_request_context, jsonify, request,
+                   send_from_directory, session)
 from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from werkzeug.exceptions import HTTPException
@@ -79,6 +82,20 @@ TRANSITIONS = {
 USER_TRANSITIONS = {("pending", "cancelled"), ("shipped", "completed")}
 REVENUE_STATUS = ("paid", "shipped", "completed")
 MAX_CART_LINES = 30
+WIB_OFFSET = timedelta(hours=7)   # batas "hari ini" memakai waktu Indonesia Barat
+
+
+def _env_int(name, default, minimum=1):
+    try:
+        return max(minimum, int(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
+# Pesanan yang belum dibayar dibatalkan otomatis dan stoknya dikembalikan
+PENDING_TTL_HOURS = _env_int("PENDING_TTL_HOURS", 24)
+EXPIRE_SWEEP_SECONDS = 60   # jeda minimum antar penyapuan per instance
+EXPIRE_BATCH = 50
 MAX_QTY_PER_PRODUCT = 99
 
 # Login dan password
@@ -91,7 +108,7 @@ PASSWORD_MAX_LEN = 128
 LOW_STOCK_LIMIT = 5        # stok <= angka ini dianggap menipis
 LOW_STOCK_LIST_SIZE = 8
 RECENT_ORDERS_SIZE = 5
-PRODUCTS_LIMIT = 200
+PRODUCTS_LIMIT = 1000
 ORDERS_LIMIT = 200
 USERS_LIMIT = 500
 LOGS_LIMIT = 150
@@ -133,6 +150,7 @@ def ensure_indexes(db):
     db[PRODUCT_COLLECTION].create_index([("category", ASCENDING)])
     db[PRODUCT_COLLECTION].create_index([("stock", ASCENDING)])
     db.orders.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
+    db.orders.create_index([("status", ASCENDING), ("created_at", ASCENDING)])
     db.logs.create_index([("ts", DESCENDING)])
 
 
@@ -213,6 +231,8 @@ OID_RE = re.compile(r"[0-9a-fA-F]{24}")
 LETTER_RE = re.compile(r"[A-Za-z]")
 DIGIT_RE = re.compile(r"\d")
 INT_TEXT_RE = re.compile(r"-?\d{1,12}")
+PHONE_RE = re.compile(r"\+?\d{8,15}")
+PHONE_ERROR = "Isi nomor HP yang benar, contoh 081234567890"
 
 NAME_ERROR = "Nama hanya boleh huruf, angka, spasi, titik, koma, apostrof, strip"
 USERNAME_ERROR = "Username 3-20 karakter: huruf kecil, angka, underscore"
@@ -431,6 +451,8 @@ SECURITY_HEADERS = {
 
 
 def client_ip():
+    if not has_request_context():   # mis. penyapuan dari skrip, bukan dari request
+        return ""
     ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.remote_addr or "")
     return sanitize(ip)[:45]
 
@@ -614,6 +636,7 @@ def product_form(data):
 @login_required
 def products_list():
     db = get_db()
+    sweep_expired_orders(db)   # stok dari pesanan kedaluwarsa kembali sebelum katalog dikirim
     search = sanitize(str(request.args.get("q", ""))[:50])
     category = sanitize(str(request.args.get("category", ""))[:30])
     query = {}
@@ -623,7 +646,8 @@ def products_list():
         query["category"] = category
     docs = list(db[PRODUCT_COLLECTION].find(query).sort("name", 1).limit(PRODUCTS_LIMIT))
     categories = sorted(c for c in db[PRODUCT_COLLECTION].distinct("category") if isinstance(c, str))
-    return jsonify({"products": [serialize(p) for p in docs], "categories": categories})
+    return jsonify({"products": [serialize(p) for p in docs], "categories": categories,
+                    "total": db[PRODUCT_COLLECTION].count_documents(query)})
 
 
 @app.post("/api/products")
@@ -637,18 +661,50 @@ def products_create():
     return jsonify({"product": serialize(db[PRODUCT_COLLECTION].find_one({"_id": result.inserted_id}))}), 201
 
 
+def parse_base_stock(data):
+    """Stok yang dilihat staf saat membuka form ubah; None bila klien tidak mengirimnya."""
+    raw = data.get("base_stock")
+    if raw is None or raw == "":
+        return None
+    value = parse_int(raw) if not isinstance(raw, bool) else None
+    if value is None or not 0 <= value <= 100_000:
+        raise ApiError("Periksa kembali isian Anda", 422, {"stock": "Stok awal tidak valid. Muat ulang halaman."})
+    return value
+
+
 @app.put("/api/products/<product_id>")
 @roles_required(*STAFF_ROLES)
 def products_update(product_id):
     target_id = object_id(product_id, "Produk")
-    clean = product_form(json_body())
+    body = json_body()
+    clean = product_form(body)
+    base_stock = parse_base_stock(body)
     clean["updated_at"] = utcnow()
     db = get_db()
-    result = db[PRODUCT_COLLECTION].update_one({"_id": target_id}, {"$set": clean})
+    collection = db[PRODUCT_COLLECTION]
+
+    # Bila base_stock dikirim, stok diubah sebagai selisih ($inc) dari yang dilihat staf, sehingga
+    # penjualan yang terjadi saat form terbuka tidak tertimpa. Tanpa base_stock: ditimpa (perilaku lama).
+    query = {"_id": target_id}
+    new_stock = clean.pop("stock")
+    update = {"$set": clean}
+    delta = None
+    if base_stock is None:
+        clean["stock"] = new_stock
+    else:
+        delta = new_stock - base_stock
+        if delta:
+            update["$inc"] = {"stock": delta}
+        if delta < 0:
+            query["stock"] = {"$gte": -delta}   # jangan sampai stok jadi negatif
+
+    result = collection.update_one(query, update)
     if result.matched_count == 0:
-        raise ApiError("Produk tidak ditemukan", 404)
-    audit("produk_ubah", clean["name"])
-    return jsonify({"product": serialize(db[PRODUCT_COLLECTION].find_one({"_id": target_id}))})
+        if not collection.find_one({"_id": target_id}):
+            raise ApiError("Produk tidak ditemukan", 404)
+        raise ApiError("Stok berubah karena ada penjualan. Muat ulang halaman lalu coba lagi.", 409)
+    audit("produk_ubah", clean["name"] + (f" (stok {delta:+d})" if delta else ""))
+    return jsonify({"product": serialize(collection.find_one({"_id": target_id}))})
 
 
 @app.delete("/api/products/<product_id>")
@@ -692,6 +748,41 @@ def release_stock(db, reserved):
         db[PRODUCT_COLLECTION].update_one({"_id": product_id}, {"$inc": {"stock": qty}})
 
 
+_last_sweep = None
+
+
+def sweep_expired_orders(db, force=False):
+    """Batalkan pesanan 'pending' yang melewati batas bayar dan kembalikan stoknya.
+
+    Dijalankan malas (saat ada request) dan dibatasi sekali per EXPIRE_SWEEP_SECONDS per instance,
+    karena di serverless tidak ada proses latar belakang. Kegagalan di sini tidak boleh
+    menggagalkan request utama.
+    """
+    global _last_sweep
+    now_ts = time.monotonic()
+    if not force and _last_sweep is not None and now_ts - _last_sweep < EXPIRE_SWEEP_SECONDS:
+        return 0
+    _last_sweep = now_ts
+
+    cancelled = 0
+    try:
+        cutoff = utcnow() - timedelta(hours=PENDING_TTL_HOURS)
+        stale = list(db.orders.find({"status": "pending", "created_at": {"$lt": cutoff}}).limit(EXPIRE_BATCH))
+        for order in stale:
+            # status dicek ulang pada filter: pesanan yang baru dibayar tidak ikut dibatalkan
+            result = db.orders.update_one(
+                {"_id": order["_id"], "status": "pending"},
+                {"$set": {"status": "cancelled", "cancel_reason": "expired", "updated_at": utcnow()}})
+            if result.modified_count != 1:
+                continue
+            release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
+            audit("pesanan_kedaluwarsa", order["code"], {"username": "sistem", "role": "-"})
+            cancelled += 1
+    except PyMongoError as exc:
+        app.logger.error("Penyapuan pesanan kedaluwarsa gagal: %s", exc)
+    return cancelled
+
+
 def reserve_stock(db, wanted):
     """Kurangi stok tiap produk secara atomik dan kembalikan (reserved, baris pesanan).
 
@@ -730,6 +821,7 @@ def check_status_change(user, current_status, new_status):
 @app.get("/api/orders")
 @login_required
 def orders_list():
+    sweep_expired_orders(get_db())
     user = current_user()
     query = {} if user["role"] in STAFF_ROLES else {"user_id": user["_id"]}
     docs = get_db().orders.find(query).sort("created_at", -1).limit(ORDERS_LIMIT)
@@ -740,7 +832,9 @@ def orders_list():
 @roles_required("user")
 def orders_create():
     data = json_body()
+    data["phone"] = re.sub(r"[\s.\-]", "", data["phone"]) if isinstance(data.get("phone"), str) else data.get("phone")
     form = Form(data)
+    form.text("phone", "Nomor HP", 8, 16, regex=PHONE_RE, regex_msg=PHONE_ERROR)
     form.text("address", "Alamat pengiriman", 5, 200, multiline=True)
     form.text("note", "Catatan", 0, 200, required=False, multiline=True)
     clean = form.done()
@@ -748,13 +842,15 @@ def orders_create():
 
     db = get_db()
     user = current_user()
+    sweep_expired_orders(db)   # lepaskan stok pesanan kedaluwarsa sebelum menghitung ketersediaan
     reserved, lines = reserve_stock(db, wanted)
     try:
         now = utcnow()
         order = {"code": new_order_code(), "user_id": user["_id"], "username": user["username"],
                  "items": lines, "total": sum(line["subtotal"] for line in lines),
-                 "address": clean["address"], "note": clean["note"], "status": "pending",
-                 "created_at": now, "updated_at": now}
+                 "phone": clean["phone"], "address": clean["address"], "note": clean["note"],
+                 "status": "pending", "created_at": now, "updated_at": now,
+                 "expires_at": now + timedelta(hours=PENDING_TTL_HOURS)}
         db.orders.insert_one(order)
     except Exception:
         release_stock(db, reserved)
@@ -804,16 +900,30 @@ def order_summary(db):
     return by_status, revenue
 
 
+def today_summary(db):
+    """Pesanan masuk dan pendapatan (pesanan berstatus dibayar ke atas) sejak 00:00 WIB hari ini."""
+    local_now = utcnow() + WIB_OFFSET
+    start = local_now.replace(hour=0, minute=0, second=0, microsecond=0) - WIB_OFFSET
+    revenue = 0
+    pipeline = [{"$match": {"created_at": {"$gte": start}, "status": {"$in": list(REVENUE_STATUS)}}},
+                {"$group": {"_id": None, "sum": {"$sum": "$total"}}}]
+    for row in db.orders.aggregate(pipeline):
+        revenue = row["sum"]
+    return {"orders": db.orders.count_documents({"created_at": {"$gte": start}}), "revenue": revenue}
+
+
 @app.get("/api/stats")
 @roles_required(*STAFF_ROLES)
 def stats():
     db = get_db()
+    sweep_expired_orders(db)
     by_status, revenue = order_summary(db)
     low_stock = (db[PRODUCT_COLLECTION].find({"stock": {"$lte": LOW_STOCK_LIMIT}})
                  .sort("stock", 1).limit(LOW_STOCK_LIST_SIZE))
     recent = db.orders.find().sort("created_at", -1).limit(RECENT_ORDERS_SIZE)
     result = {
         "revenue": revenue,
+        "today": today_summary(db),
         "orders": {"total": sum(by_status.values()), **by_status},
         "products": db[PRODUCT_COLLECTION].count_documents({}),
         "low_stock": [serialize(p) for p in low_stock],

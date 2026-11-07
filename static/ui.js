@@ -2,6 +2,8 @@
 
 import { $, $$, MAX_TOASTS, escapeHtml, formatRupiah } from './core.js';
 
+export const EASE = 'cubic-bezier(.2,.8,.2,1)';
+
 // === Komponen UI ===
 
 // --- Toast ---
@@ -51,7 +53,7 @@ export function linkLabels(root) {
 
 export function openModal(html) {
   const root = $('#modal-root');
-  if (!root.firstChild) modalReturnFocus = document.activeElement;
+  if (!root.querySelector('.overlay:not(.leaving)')) modalReturnFocus = document.activeElement;
   document.documentElement.classList.add('lock');
   root.innerHTML = `<div class="overlay" data-act="overlay"><div class="modal" role="dialog" aria-modal="true">${html}</div></div>`;
 
@@ -71,7 +73,8 @@ export function openModal(html) {
 }
 
 export function closeModal() {
-  $('#modal-root').innerHTML = '';
+  const root = $('#modal-root');
+  const overlay = root.querySelector('.overlay:not(.leaving)');
   document.documentElement.classList.remove('lock');
 
   if (modalReturnFocus && modalReturnFocus.isConnected && typeof modalReturnFocus.focus === 'function') {
@@ -84,6 +87,11 @@ export function closeModal() {
     modalResolve = null;
     resolve(false);
   }
+
+  // Modal menutup dengan animasi singkat, lalu dilepas dari halaman
+  if (!overlay || reducedMotion.matches) { root.innerHTML = ''; return; }
+  overlay.classList.add('leaving');
+  setTimeout(() => { if (overlay.isConnected && overlay.classList.contains('leaving')) overlay.remove(); }, 170);
 }
 
 // resolve true bila OK, false bila batal/ditutup
@@ -98,6 +106,23 @@ export function confirmDialog(title, message, okLabel, danger = false) {
 
 // --- Gerak dan animasi ---
 export const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+// Angka berjalan dari nilai lama ke nilai baru (mis. total keranjang)
+const tweens = new WeakMap();
+export function tweenNumber(el, to, format) {
+  const from = Number(el.dataset.value ?? to);
+  el.dataset.value = to;
+  cancelAnimationFrame(tweens.get(el));
+  if (reducedMotion.matches || from === to) { el.textContent = format(to); return; }
+
+  const startedAt = performance.now();
+  const step = now => {
+    const progress = Math.min(1, (now - startedAt) / 380);
+    el.textContent = format(Math.round(from + (to - from) * (1 - Math.pow(1 - progress, 3))));
+    if (progress < 1) tweens.set(el, requestAnimationFrame(step));
+  };
+  tweens.set(el, requestAnimationFrame(step));
+}
 
 // pakai View Transition bila didukung
 export const withTransition = update =>

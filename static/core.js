@@ -80,6 +80,7 @@ export const state = {
 
   // katalog dan keranjang
   products: [],
+  productsTotal: 0,      // jumlah produk di server (bisa lebih besar dari yang dimuat)
   productMap: {},        // id produk -> produk
   categories: [],
   category: '',
@@ -91,6 +92,7 @@ export const state = {
   orders: [],
   orderFilter: '',
   justUpdatedOrderId: null,
+  fresh: false,          // true saat halaman baru dibuka (animasi masuk hanya saat itu)
   stats: null,
   users: [],
   logs: []

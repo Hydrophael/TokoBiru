@@ -7,10 +7,11 @@ from conftest import PASSWORD
 
 PRODUCT = {"name": "Minyak Goreng 2L", "category": "Sembako", "price": 38000, "stock": 20}
 ADDRESS = "Jl. Merdeka No. 1, Ungaran"
+PHONE = "081234567890"
 
 
 def order_body(product, qty=1):
-    return {"address": ADDRESS, "items": [{"product_id": str(product["_id"]), "qty": qty}]}
+    return {"address": ADDRESS, "phone": PHONE, "items": [{"product_id": str(product["_id"]), "qty": qty}]}
 
 
 def product_names(response):
@@ -303,7 +304,7 @@ class TestPesanan:
     def test_stok_dikembalikan_bila_sebagian_gagal(self, customer, product, db):
         habis = {"name": "Habis", "category": "X", "price": 1000, "stock": 0}
         db["master_product"].insert_one(habis)
-        body = {"address": ADDRESS, "items": [
+        body = {"address": ADDRESS, "phone": PHONE, "items": [
             {"product_id": str(product["_id"]), "qty": 2},
             {"product_id": str(habis["_id"]), "qty": 1}]}
         assert customer.post("/api/orders", body).status_code == 409
@@ -311,7 +312,7 @@ class TestPesanan:
 
     @pytest.mark.parametrize("items", [[], "x", [{"product_id": "bad", "qty": 1}], None])
     def test_keranjang_tidak_valid(self, customer, items):
-        assert customer.post("/api/orders", {"address": ADDRESS, "items": items}).status_code in (400, 422)
+        assert customer.post("/api/orders", {"address": ADDRESS, "phone": PHONE, "items": items}).status_code in (400, 422)
 
     @pytest.mark.parametrize("qty", [0, -1, 100, "abc"])
     def test_jumlah_tidak_valid(self, customer, product, qty):

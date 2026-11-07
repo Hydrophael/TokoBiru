@@ -28,16 +28,19 @@ import {
   stockInfo,
   storage
 } from './core.js';
-import { linkLabels, openModal, reducedMotion, toast } from './ui.js';
+import { EASE, linkLabels, openModal, reducedMotion, toast, tweenNumber } from './ui.js';
 
 // === Modal pesanan berhasil ===
+
+const deadlineHtml = order =>
+  order.expires_at ? ` Bayar sebelum <b>${formatDate(order.expires_at)}</b>, jika tidak pesanan dibatalkan otomatis.` : '';
 
 export function showOrderSuccess(order) {
   if (!order) return;
   openModal(`<div class="done"><svg class="done-ic" viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="24"/><path d="M15 27l8 8 14-19"/></svg>
     <h3>Pesanan berhasil dibuat</h3><p class="sub">Satu langkah lagi: bayar agar pesanan segera diproses.</p></div>
     <div class="r-pay">${payRow('Nominal', formatRupiah(order.total), order.total)}${payRow('Kode pesanan', order.code, order.code)}${state.payInfo ? payRow('Tujuan', state.payInfo, state.payInfo) : ''}
-    <p class="muted small">Cantumkan kode pesanan saat membayar.</p></div>
+    <p class="muted small">Cantumkan kode pesanan saat membayar.${deadlineHtml(order)}</p></div>
     <div class="foot"><button class="btn primary" data-act="close-modal">Mengerti</button></div>`);
 }
 
@@ -58,7 +61,7 @@ const loginFormHtml = () => `
     <form data-form="login" novalidate>
       <div class="form-alert" role="alert"></div>
       <div class="field"><label for="f-id">Username atau email</label><input class="input" id="f-id" name="identifier"
-        autocapitalize="none" spellcheck="false" placeholder="Contoh: budi atau budi@email.com"
+        autocapitalize="none" spellcheck="false" placeholder="Username atau email Anda"
         autocomplete="username" required maxlength="120"></div>
       <div class="field" style="margin-bottom:10px"><label for="f-pw">Password</label><input class="input" id="f-pw" name="password"
         type="password" placeholder="Password Anda" autocomplete="current-password" required maxlength="128"></div>
@@ -72,17 +75,17 @@ const registerFormHtml = () => `
       <div class="form-alert" role="alert"></div>
       <div class="pair">
       <div class="field"><label for="r-name">Nama lengkap</label><input class="input" id="r-name" name="name"
-        placeholder="Budi Santoso" required maxlength="50" autocomplete="name"></div>
+        placeholder="Nama lengkap Anda" required maxlength="50" autocomplete="name"></div>
       <div class="field"><label for="r-user">Username</label><input class="input" id="r-user" name="username"
-        autocapitalize="none" spellcheck="false" placeholder="budisantoso" required maxlength="20" autocomplete="username"></div>
+        autocapitalize="none" spellcheck="false" placeholder="Pilih username unik" required maxlength="20" autocomplete="username"></div>
       </div>
       <div class="field"><label for="r-email">Email</label><input class="input" id="r-email" name="email"
         type="email" placeholder="nama@email.com" required maxlength="120" autocomplete="email"></div>
       <div class="pair">
       <div class="field"><label for="r-pw">Password</label><input class="input" id="r-pw" name="password"
-        type="password" required minlength="8" maxlength="128" autocomplete="new-password" aria-describedby="r-pw-hint"></div>
+        type="password" placeholder="Minimal 8 karakter" required minlength="8" maxlength="128" autocomplete="new-password" aria-describedby="r-pw-hint"></div>
       <div class="field"><label for="r-pw2">Ulangi password</label><input class="input" id="r-pw2" name="confirm"
-        type="password" required autocomplete="new-password"></div>
+        type="password" placeholder="Ulangi password" required autocomplete="new-password"></div>
       </div>
       <p class="muted small" id="r-pw-hint" style="margin:-2px 0 10px">Minimal 8 karakter, berisi huruf dan angka.</p>
       <label class="showpw"><input type="checkbox" data-act="toggle-pw"> Tampilkan password</label>
@@ -99,7 +102,7 @@ function authArtHtml() {
   return `<section class="auth-art">
       ${brandHtml('color:var(--hero-ink)')}
       <div class="art-body">
-        <h1>Rak penuh,<br>stok jujur.</h1>
+        <h1><span class="ln"><span>Rak penuh,</span></span><span class="ln"><span>stok jujur.</span></span></h1>
         <p>Pilih barang, isi keranjang, dan pantau pesanan sampai tiba. Pemilik toko melihat stok dan penjualan di tempat yang sama.</p>
         <div class="pricetag" aria-hidden="true">
           <div class="pt-head"><small>Harga rak</small><div class="pt-dots">${dots}</div></div>
@@ -111,35 +114,116 @@ function authArtHtml() {
     </section>`;
 }
 
-function authPanelHtml(tab) {
+// Kartu terdiri dari tab (tetap) dan area formulir (diganti saat pindah tab)
+function authTabsHtml(tab) {
   const isLogin = tab === 'login';
-  return `<section class="auth-panel"><div class="auth-card">
-      <div class="switch-tabs" role="tablist">
-        <button role="tab" class="${isLogin ? 'active' : ''}" data-act="auth-tab" data-tab="login">Masuk</button>
-        <button role="tab" class="${!isLogin ? 'active' : ''}" data-act="auth-tab" data-tab="register">Daftar</button>
-      </div>
-      ${isLogin ? loginFormHtml() : registerFormHtml()}
-      <p class="alt muted">${isLogin ? 'Belum punya akun?' : 'Sudah punya akun?'} <button type="button" class="linkbtn" data-act="auth-tab" data-tab="${isLogin ? 'register' : 'login'}">${isLogin ? 'Daftar gratis' : 'Masuk'}</button></p>
-    </div>
-    </section>`;
+  return `<div class="switch-tabs" role="tablist" data-tab="${tab}">
+        <button role="tab" aria-selected="${isLogin}" class="${isLogin ? 'active' : ''}" data-act="auth-tab" data-tab="login">Masuk</button>
+        <button role="tab" aria-selected="${!isLogin}" class="${!isLogin ? 'active' : ''}" data-act="auth-tab" data-tab="register">Daftar</button>
+      </div>`;
+}
+
+function authFormAreaHtml(tab) {
+  const isLogin = tab === 'login';
+  return `${isLogin ? loginFormHtml() : registerFormHtml()}
+      <p class="alt muted">${isLogin ? 'Belum punya akun?' : 'Sudah punya akun?'} <button type="button" class="linkbtn" data-act="auth-tab" data-tab="${isLogin ? 'register' : 'login'}">${isLogin ? 'Daftar gratis' : 'Masuk'}</button></p>`;
+}
+
+const authPanelHtml = tab =>
+  `<section class="auth-panel"><div class="auth-card">${authTabsHtml(tab)}<div class="auth-swap">${authFormAreaHtml(tab)}</div></div></section>`;
+
+// Fokus otomatis hanya di perangkat dengan mouse (hindari keyboard muncul di HP)
+function focusFirstField() {
+  if (!matchMedia('(hover:hover) and (pointer:fine)').matches) return;
+  const firstInput = $('.auth-card form input:not([type=checkbox])');
+  if (firstInput) firstInput.focus();
+}
+
+// Pindah Masuk/Daftar: bagian kiri tidak disentuh. Formulir lama keluar, kartu menyesuaikan tinggi,
+// lalu isi baru masuk satu per satu dari arah tab yang dipilih.
+let swapToken = 0;
+
+async function swapAuthTab(card, tab) {
+  const tabs = $('.switch-tabs', card);
+  if (tabs.dataset.tab === tab) return;
+
+  const swap = $('.auth-swap', card);
+  const token = ++swapToken;
+  swap.getAnimations().forEach(animation => animation.cancel());  // klik tab lagi di tengah animasi
+  swap.style.overflow = '';
+  swap.style.pointerEvents = '';
+  const fromHeight = swap.offsetHeight;
+  const direction = tab === 'register' ? 1 : -1;
+
+  tabs.dataset.tab = tab;
+  $$('button', tabs).forEach(button => {
+    const active = button.dataset.tab === tab;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', active);
+  });
+
+  const replaceContent = () => {
+    swap.getAnimations().forEach(animation => animation.cancel());
+    swap.innerHTML = authFormAreaHtml(tab);
+    swap.style.pointerEvents = '';
+    linkLabels(swap);
+    focusFirstField();
+  };
+
+  if (reducedMotion.matches) return replaceContent();
+
+  // 1. isi lama keluar ke arah berlawanan
+  swap.style.pointerEvents = 'none';
+  try {
+    await swap.animate(
+      [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-direction * 14}px)` }],
+      { duration: 90, easing: 'ease-in', fill: 'forwards' }
+    ).finished;
+  } catch { return; }              // dibatalkan oleh pemanggilan berikutnya
+  if (token !== swapToken) return;
+
+  // 2. ganti isi, lalu tinggi kartu menyesuaikan
+  replaceContent();
+  const toHeight = swap.offsetHeight;
+  if (fromHeight !== toHeight) {
+    swap.style.overflow = 'hidden';
+    swap.animate([{ height: fromHeight + 'px' }, { height: toHeight + 'px' }], { duration: 260, easing: EASE })
+      .onfinish = () => { swap.style.overflow = ''; };
+  }
+
+  // 3. bagian-bagian formulir masuk bergantian
+  staggerIn(swap, direction, 0, { duration: 260, step: 18 });
+}
+
+// Judul, kolom isian, dan tombol muncul satu per satu (direction 0 = naik dari bawah saja)
+function staggerIn(swap, direction, startDelay, { duration = 420, step = 36 } = {}) {
+  if (reducedMotion.matches) return;
+  const parts = $$(':scope > h2, :scope > p, :scope > form > *', swap).filter(el => el.getClientRects().length);
+  parts.forEach((el, index) => el.animate(
+    [{ opacity: 0, transform: `translate(${direction * 12}px, 10px)` }, { opacity: 1, transform: 'none' }],
+    { duration, delay: startDelay + index * step, easing: EASE, fill: 'backwards' }
+  ));
 }
 
 export function renderAuth(tab = state.authTab) {
   state.authTab = tab;
+
+  const card = $('#app .auth .auth-card');
+  if (card) {
+    // Halaman masuk sudah tampil: ganti formulirnya saja, bagian kiri tetap utuh
+    swapAuthTab(card, tab);
+    return;
+  }
+
   $('#app').innerHTML = `
   <div class="auth">
     ${authArtHtml()}
     ${authPanelHtml(tab)}
   </div>`;
-
-  linkLabels($('#app'));
   startPriceTagRotation();
-
-  // Fokus otomatis hanya di perangkat dengan mouse (hindari keyboard muncul di HP)
-  if (matchMedia('(hover:hover) and (pointer:fine)').matches) {
-    const firstInput = $('.auth-card form input:not([type=checkbox])');
-    if (firstInput) firstInput.focus();
-  }
+  linkLabels($('#app'));
+  focusFirstField();
+  staggerIn($('.auth-swap'), 0, 460);   // setelah kartu muncul
 }
 
 let priceTagTimer;
@@ -178,30 +262,74 @@ const cartDrawerHtml = () => `<div class="scrim" id="scrim" data-act="close-cart
   </aside>
   <button class="cartbar" id="cartbar" data-act="open-cart" aria-label="Buka keranjang" hidden></button>`;
 
+const skeletonHtml = () => `<div class="shelf">${'<div class="skeleton"></div>'.repeat(6)}</div>`;
+
+// Penanda menu aktif meluncur ke tombol yang dipilih (posisi dibaca dari tombolnya)
+export function moveNavIndicator() {
+  const nav = $('.nav');
+  const active = nav && $('button.active', nav);
+  if (!active) return;
+
+  const first = !nav.classList.contains('ready');
+  nav.style.setProperty('--x', active.offsetLeft + 'px');
+  nav.style.setProperty('--y', active.offsetTop + 'px');
+  nav.style.setProperty('--w', active.offsetWidth + 'px');
+  nav.style.setProperty('--h', active.offsetHeight + 'px');
+  if (first) requestAnimationFrame(() => requestAnimationFrame(() => nav.classList.add('ready')));
+}
+
+function updateNav() {
+  $$('.nav button').forEach(button => {
+    const active = button.dataset.view === state.view;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-current', active ? 'page' : 'false');
+  });
+  moveNavIndicator();
+}
+
+let navFrame;
+addEventListener('resize', () => { cancelAnimationFrame(navFrame); navFrame = requestAnimationFrame(moveNavIndicator); });
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(moveNavIndicator);
+
 export function renderShell() {
   const user = state.user;
   const navItems = NAV.filter(item => item.roles.includes(user.role));
   const customer = isCustomer();
 
+  // Kerangka sudah tampil (pindah menu): header tidak digambar ulang, hanya penanda menu yang bergeser
+  const header = $('#app .top');
+  if (header && header.dataset.user === String(user.id)) {
+    updateNav();
+    const content = $('#content');
+    content.classList.remove('fresh');
+    content.innerHTML = skeletonHtml();
+    return;
+  }
+
   $('#app').innerHTML = `
-  <header class="top"><div class="top-in">
+  <header class="top" data-user="${escapeHtml(user.id)}"><div class="top-in">
     ${brandHtml()}
-    <nav class="nav" aria-label="Menu utama">${navHtml(navItems)}</nav>
+    <nav class="nav" aria-label="Menu utama"><span class="nav-ind" aria-hidden="true"></span>${navHtml(navItems)}</nav>
     <div class="top-r">
       ${customer ? `<button class="btn cart-btn" data-act="open-cart">${icon('cart')}<span class="hide-m">Keranjang</span><span class="count num" id="cart-count">0</span></button>` : ''}
       <div class="who"><b>${escapeHtml(user.name)}</b><span class="tag ${user.role}">${ROLE_LABEL[user.role]}</span></div>
       <button class="btn sm" data-act="logout" aria-label="Keluar">${icon('out', 15)}<span>Keluar</span></button>
     </div>
   </div></header>
-  <main class="wrap"><div id="content"><div class="shelf">${'<div class="skeleton"></div>'.repeat(6)}</div></div></main>
+  <main class="wrap"><div id="content">${skeletonHtml()}</div></main>
   ${customer ? cartDrawerHtml() : ''}`;
 
+  moveNavIndicator();
   if (customer) drawCart();
 }
 
 // === Tampilan ===
 
 // --- Belanja ---
+
+const truncationNotice = () => state.productsTotal > state.products.length
+  ? `<p class="muted small" role="status">Katalog sangat besar: hanya ${state.products.length} dari ${state.productsTotal} produk yang dimuat.</p>`
+  : '';
 
 function filteredProducts() {
   const query = state.query.trim().toLowerCase();
@@ -278,7 +406,8 @@ const shopView = () => `
   <div class="aisle" id="aisle" aria-hidden="true">${aisleHtml()}</div>
   <div class="toolbar"><span class="muted small" id="rcount" aria-live="polite">${filteredProducts().length} produk</span>
     <label class="sortsel">Urutkan <select class="select sm" data-sort aria-label="Urutkan produk">${sortOptionHtml('name', 'Nama A–Z')}${sortOptionHtml('low', 'Harga terendah')}${sortOptionHtml('high', 'Harga tertinggi')}</select></label></div>
-  <div id="plist">${productCards(true)}</div>`;
+  ${truncationNotice()}
+  <div id="plist">${productCards(state.fresh)}</div>`;
 
 // --- Keranjang ---
 
@@ -354,7 +483,7 @@ export function drawCart() {
   itemsEl.innerHTML = lines.length
     ? lines.map(cartItemHtml).join('')
     : emptyState('Keranjang masih kosong', 'Pilih barang di halaman Belanja, lalu tekan Keranjang.', '<button class="btn primary" data-act="close-cart">Mulai belanja</button>');
-  $('#cart-total').textContent = formatRupiah(total);
+  tweenNumber($('#cart-total'), total, formatRupiah);
 
   const countEl = $('#cart-count');
   if (countEl.textContent !== count) {
@@ -424,20 +553,22 @@ function customerOrderActions(order) {
 const orderActions = order => (isStaff() ? staffOrderActions(order) : customerOrderActions(order));
 
 const orderPaymentHtml = order =>
-  `<div class="r-pay"><b>Cara bayar</b>${payRow('Nominal', formatRupiah(order.total), order.total)}${payRow('Kode pesanan', order.code, order.code)}${state.payInfo ? payRow('Tujuan', state.payInfo, state.payInfo, 'Tujuan bayar') : ''}<p class="muted small">Cantumkan kode pesanan saat membayar. Pesanan diproses setelah admin mengonfirmasi pembayaran.</p></div>`;
+  `<div class="r-pay"><b>Cara bayar</b>${payRow('Nominal', formatRupiah(order.total), order.total)}${payRow('Kode pesanan', order.code, order.code)}${state.payInfo ? payRow('Tujuan', state.payInfo, state.payInfo, 'Tujuan bayar') : ''}<p class="muted small">Cantumkan kode pesanan saat membayar. Pesanan diproses setelah admin mengonfirmasi pembayaran.${deadlineHtml(order)}</p></div>`;
 
 const orderLineHtml = item =>
   `<li><span>${escapeHtml(item.name)}</span><span class="num">${formatRupiah(item.subtotal)}</span><em class="num">${item.qty} × ${formatRupiah(item.price)}</em></li>`;
 
-function orderCardHtml(order, staff) {
+function orderCardHtml(order, staff, index = 0) {
   const [statusLabel, statusColor] = STATUS[order.status];
   const justUpdated = order.id === state.justUpdatedOrderId ? ' just' : '';
   const owner = staff ? ', atas nama <b>' + escapeHtml(order.username) + '</b>' : '';
-  const note = order.note ? '<br>Catatan: ' + escapeHtml(order.note) : '';
+  const note = (order.phone ? '<br>HP/WA: <b class="num">' + escapeHtml(order.phone) + '</b>' : '') +
+    (order.note ? '<br>Catatan: ' + escapeHtml(order.note) : '') +
+    (order.cancel_reason === 'expired' ? '<br><em>Dibatalkan otomatis karena melewati batas waktu bayar.</em>' : '');
   const payment = !staff && order.status === 'pending' ? orderPaymentHtml(order) : '';
 
   return `
-    <article class="receipt">
+    <article class="receipt" style="--i:${Math.min(index, 8)}">
       <div class="r-top"><div><span class="r-code num">${escapeHtml(order.code)}</span><span class="muted small">${formatDate(order.created_at)}${owner}</span></div>
         <span class="stamp ${statusColor}${justUpdated}">${statusLabel}</span></div>
       ${timelineHtml(order.status)}
@@ -449,7 +580,7 @@ function orderCardHtml(order, staff) {
     </article>`;
 }
 
-export function orderCards() {
+export function orderCards(animate = false) {
   const staff = isStaff();
   const list = state.orders.filter(o => !state.orderFilter || o.status === state.orderFilter);
 
@@ -459,7 +590,7 @@ export function orderCards() {
       staff ? 'Pesanan pelanggan akan muncul di sini.' : 'Pesanan Anda akan muncul di sini setelah checkout.'
     );
   }
-  return `<div class="receipts">${list.map(order => orderCardHtml(order, staff)).join('')}</div>`;
+  return `<div class="receipts${animate ? ' stagger' : ''}">${list.map((order, index) => orderCardHtml(order, staff, index)).join('')}</div>`;
 }
 
 export const orderRailHtml = () =>
@@ -472,7 +603,7 @@ function ordersView() {
   return `
   <div class="page-head"><div><h2>${customer ? 'Pesanan saya' : 'Semua pesanan'}</h2><p class="muted">${customer ? 'Lihat status dan riwayat pesanan Anda.' : 'Konfirmasi pembayaran, kirim, dan selesaikan pesanan pelanggan.'}</p></div></div>
   <div class="rail" id="orail">${orderRailHtml()}</div>
-  <div id="olist">${orderCards()}</div>`;
+  <div id="olist">${orderCards(state.fresh)}</div>`;
 }
 
 // --- Ringkasan ---
@@ -483,7 +614,10 @@ function dashboardFactsHtml(stats) {
     ? `<div class="fact" style="grid-column:1/-1"><b class="num">${stats.users.user + stats.users.admin + stats.users.master}</b><span>Pengguna: ${stats.users.user} pelanggan, ${stats.users.admin} admin, ${stats.users.master} master</span></div>`
     : '';
 
+  const today = stats.today || { orders: 0, revenue: 0 };
   return `<div class="facts">
+      <div class="fact"><b class="num">${today.orders}</b><span>Pesanan hari ini</span></div>
+      <div class="fact"><b class="num">${formatRupiah(today.revenue)}</b><span>Pendapatan hari ini (sudah dibayar)</span></div>
       <div class="fact"><b class="num">${stats.orders.total}</b><span>Total pesanan</span></div>
       <div class="fact"><b class="num">${stats.orders.pending}</b><span>Menunggu pembayaran</span></div>
       <div class="fact"><b class="num">${stats.products}</b><span>Produk di katalog</span></div>
@@ -512,10 +646,10 @@ const lowStockHtml = stats => stats.low_stock.length
 function dashboardView() {
   const stats = state.stats;
   return `
-  <div class="page-head"><div><h2>Ringkasan</h2><p class="muted">Penjualan, pesanan, dan stok hari ini.</p></div>
+  <div class="page-head"><div><h2>Ringkasan</h2><p class="muted">Penjualan, pesanan, dan stok. Angka &ldquo;hari ini&rdquo; dihitung sejak pukul 00.00 WIB.</p></div>
     <button class="btn" data-act="reload">Perbarui data</button></div>
   <div class="lead">
-    <div class="revenue"><span>Pendapatan dari pesanan yang sudah dibayar</span><strong class="num">${formatRupiah(stats.revenue)}</strong></div>
+    <div class="revenue"><span>Total pendapatan dari pesanan yang sudah dibayar</span><strong class="num">${formatRupiah(stats.revenue)}</strong></div>
     ${dashboardFactsHtml(stats)}
   </div>
   <div class="two">
@@ -533,8 +667,8 @@ function dashboardView() {
 
 // --- Produk ---
 
-function productRowHtml(product) {
-  return `<tr>
+function productRowHtml(product, index = 0) {
+  return `<tr style="--i:${Math.min(index, 10)}">
     <td data-label="Produk"><div class="cell"><span class="mini" aria-hidden="true">${productEmoji(product)}</span><div><b>${escapeHtml(product.name)}</b><div class="muted small">${escapeHtml(String(product.description ?? '').slice(0, 60))}</div></div></div></td>
     <td data-label="Kategori"><span class="tag">${escapeHtml(product.category)}</span></td><td data-label="Harga"><b class="num">${formatRupiah(product.price)}</b></td><td data-label="Stok">${stockInfo(product)}</td>
     <td data-label="Aksi"><div class="acts end"><button class="btn sm" data-act="product-edit" data-id="${product.id}">${icon('edit', 13)} Ubah</button>
@@ -561,7 +695,8 @@ const productsView = () => `
   <div class="page-head"><div><h2>Produk</h2><p class="muted">Tambah, ubah harga dan stok, atau hapus produk.</p></div>
     <div class="acts"><label class="search">${icon('search')}<input data-input="prod-search" placeholder="Cari produk atau kategori" maxlength="50" aria-label="Cari"></label>
     <button class="btn primary" data-act="product-new">${icon('plus', 15)} Tambah produk</button></div></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Produk</th><th>Kategori</th><th>Harga</th><th>Stok</th><th class="right">Aksi</th></tr></thead><tbody id="prows">${productRows()}</tbody></table></div>`;
+  ${truncationNotice()}
+  <div class="tbl-wrap${state.fresh ? ' stagger' : ''}"><table><thead><tr><th>Produk</th><th>Kategori</th><th>Harga</th><th>Stok</th><th class="right">Aksi</th></tr></thead><tbody id="prows">${productRows()}</tbody></table></div>`;
 
 export function productModal(product) {
   const isEdit = Boolean(product);
@@ -572,13 +707,14 @@ export function productModal(product) {
     <h3>${isEdit ? 'Ubah produk' : 'Tambah produk'}</h3><p class="sub">${isEdit ? 'Perubahan langsung tampil di katalog pelanggan.' : 'Produk baru langsung muncul di katalog.'}</p>
     <form data-form="product" data-id="${isEdit ? product.id : ''}" novalidate>
       <div class="form-alert" role="alert"></div>
-      <div class="field"><label>Nama produk</label><input class="input" name="name" required maxlength="80" value="${escapeHtml(values.name)}"></div>
+      ${isEdit ? `<input type="hidden" name="base_stock" value="${escapeHtml(product.stock)}">` : ''}
+      <div class="field"><label>Nama produk</label><input class="input" name="name" required maxlength="80" placeholder="Contoh: Beras Premium 5 kg" value="${escapeHtml(values.name)}"></div>
       <div class="row2">
-        <div class="field"><label>Kategori</label><input class="input" name="category" list="cats" required maxlength="30" value="${escapeHtml(values.category)}"><datalist id="cats">${categoryOptions}</datalist></div>
-        <div class="field"><label>Harga (Rp)</label><input class="input" name="price" type="number" min="100" max="100000000" step="1" required value="${escapeHtml(values.price)}"></div>
+        <div class="field"><label>Kategori</label><input class="input" name="category" list="cats" required maxlength="30" placeholder="Contoh: Sembako" value="${escapeHtml(values.category)}"><datalist id="cats">${categoryOptions}</datalist></div>
+        <div class="field"><label>Harga (Rp)</label><input class="input" name="price" type="number" placeholder="Contoh: 38000" min="100" max="100000000" step="1" required value="${escapeHtml(values.price)}"></div>
       </div>
-      <div class="field"><label>Stok</label><input class="input" name="stock" type="number" min="0" max="100000" step="1" required value="${escapeHtml(values.stock)}"></div>
-      <div class="field"><label>Deskripsi (opsional)</label><textarea class="input" name="description" maxlength="300">${escapeHtml(values.description)}</textarea></div>
+      <div class="field"><label>Stok</label><input class="input" name="stock" type="number" placeholder="Contoh: 20" min="0" max="100000" step="1" required value="${escapeHtml(values.stock)}"></div>
+      <div class="field"><label>Deskripsi (opsional)</label><textarea class="input" name="description" maxlength="300" placeholder="Keterangan singkat produk">${escapeHtml(values.description)}</textarea></div>
       <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Simpan produk</button></div>
     </form>`);
 }
@@ -591,10 +727,10 @@ const roleSelectHtml = user =>
 const activeSwitchHtml = user =>
   `<label class="sw"><input type="checkbox" data-change="user-active" data-id="${user.id}" ${user.active ? 'checked' : ''} aria-label="Aktif ${escapeHtml(user.username)}"><span></span></label>`;
 
-function userRowHtml(user) {
+function userRowHtml(user, index = 0) {
   // Akun master dan akun sendiri tidak bisa diubah dari sini
   const locked = user.role === 'master' || user.id === state.user.id;
-  return `<tr><td data-label="Pengguna"><div class="cell"><span class="mini">${escapeHtml(getInitials(user.name))}</span><div><b>${escapeHtml(user.name)}</b><div class="muted small">@${escapeHtml(user.username)}</div></div></div></td>
+  return `<tr style="--i:${Math.min(index, 10)}"><td data-label="Pengguna"><div class="cell"><span class="mini">${escapeHtml(getInitials(user.name))}</span><div><b>${escapeHtml(user.name)}</b><div class="muted small">@${escapeHtml(user.username)}</div></div></div></td>
     <td data-label="Email">${escapeHtml(user.email)}</td>
     <td data-label="Role">${locked ? `<span class="tag ${user.role}">${ROLE_LABEL[user.role]}</span>` : roleSelectHtml(user)}</td>
     <td data-label="Aktif">${locked ? '<span class="tag ok">Aktif</span>' : activeSwitchHtml(user)}</td>
@@ -605,34 +741,34 @@ function userRowHtml(user) {
 const usersView = () => `
   <div class="page-head"><div><h2>Pengguna</h2><p class="muted">Atur role, nonaktifkan, atau hapus akun. Akun master tidak bisa diubah dari sini.</p></div>
     <button class="btn primary" data-act="user-new">${icon('plus', 15)} Tambah pengguna</button></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Pengguna</th><th>Email</th><th>Role</th><th>Aktif</th><th>Terdaftar</th><th class="right">Aksi</th></tr></thead><tbody>
+  <div class="tbl-wrap${state.fresh ? ' stagger' : ''}"><table><thead><tr><th>Pengguna</th><th>Email</th><th>Role</th><th>Aktif</th><th>Terdaftar</th><th class="right">Aksi</th></tr></thead><tbody>
   ${state.users.map(userRowHtml).join('')}</tbody></table></div>`;
 
 export function userModal() {
   openModal(`<h3>Tambah pengguna</h3><p class="sub">Buat akun admin untuk staf, atau akun pelanggan.</p>
     <form data-form="user-create" novalidate><div class="form-alert" role="alert"></div>
-      <div class="field"><label>Nama lengkap</label><input class="input" name="name" required maxlength="50"></div>
-      <div class="row2"><div class="field"><label>Username</label><input class="input" name="username" required maxlength="20"></div>
+      <div class="field"><label>Nama lengkap</label><input class="input" name="name" required maxlength="50" placeholder="Nama lengkap"></div>
+      <div class="row2"><div class="field"><label>Username</label><input class="input" name="username" required maxlength="20" placeholder="Username unik"></div>
       <div class="field"><label>Role</label><select class="select" name="role"><option value="admin">Admin</option><option value="user">Pelanggan</option></select></div></div>
-      <div class="field"><label>Email</label><input class="input" name="email" type="email" required maxlength="120"></div>
-      <div class="field"><label>Password</label><input class="input" name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password"></div>
+      <div class="field"><label>Email</label><input class="input" name="email" type="email" required maxlength="120" placeholder="nama@email.com"></div>
+      <div class="field"><label>Password</label><input class="input" name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="Minimal 8 karakter"></div>
       <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Buat akun</button></div></form>`);
 }
 
 // --- Log ---
 
-function logRowHtml(log) {
+function logRowHtml(log, index = 0) {
   const isFailure = /gagal|ditolak/.test(log.action);
   const roleTag = log.role !== '-'
     ? `<span class="tag ${escapeHtml(log.role)}">${escapeHtml(ROLE_LABEL[log.role] || log.role)}</span>`
     : '';
-  return `<tr><td data-label="Waktu" class="muted small">${formatDate(log.ts)}</td><td data-label="Pengguna"><b>${escapeHtml(log.actor)}</b> ${roleTag}</td>
+  return `<tr style="--i:${Math.min(index, 10)}"><td data-label="Waktu" class="muted small">${formatDate(log.ts)}</td><td data-label="Pengguna"><b>${escapeHtml(log.actor)}</b> ${roleTag}</td>
     <td data-label="Aksi"><span class="tag ${isFailure ? 'err' : ''}">${escapeHtml(log.action)}</span></td><td data-label="Detail">${escapeHtml(log.detail)}</td><td data-label="IP" class="muted small">${escapeHtml(log.ip)}</td></tr>`;
 }
 
 const logsView = () => `
   <div class="page-head"><div><h2>Log aktivitas</h2><p class="muted">150 aktivitas terakhir di toko, termasuk login gagal dan akses yang ditolak.</p></div><button class="btn" data-act="reload">Perbarui data</button></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Waktu</th><th>Pengguna</th><th>Aksi</th><th>Detail</th><th>IP</th></tr></thead><tbody>
+  <div class="tbl-wrap${state.fresh ? ' stagger' : ''}"><table><thead><tr><th>Waktu</th><th>Pengguna</th><th>Aksi</th><th>Detail</th><th>IP</th></tr></thead><tbody>
   ${state.logs.map(logRowHtml).join('') || `<tr><td colspan="5">${emptyState('Belum ada aktivitas')}</td></tr>`}
   </tbody></table></div>`;
 
