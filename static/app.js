@@ -43,6 +43,7 @@ import {
   drawCart,
   orderCards,
   orderRailHtml,
+  passwordModal,
   productModal,
   productRows,
   renderAuth,
@@ -60,6 +61,8 @@ hooks.onSessionExpired = () => {
   state.user = null;
   renderAuth();
   toast('Sesi berakhir. Masuk lagi untuk melanjutkan.', 'err');
+  // sesi di server sudah dibersihkan, jadi token CSRF lama tidak berlaku lagi untuk login berikutnya
+  api('/auth/me').then(me => { state.csrf = me.csrf; }).catch(() => {});
 };
 
 // === Alur aplikasi: sesi, navigasi, pemuatan data ===
@@ -353,7 +356,7 @@ function deleteUser(el) {
 }
 
 function togglePasswordVisibility(checkbox) {
-  $$('input[name=password],input[name=confirm]', checkbox.closest('form')).forEach(input => {
+  $$('input[name=password],input[name=confirm],input[data-pw]', checkbox.closest('form')).forEach(input => {
     input.type = checkbox.checked ? 'text' : 'password';
   });
 }
@@ -385,6 +388,7 @@ const actions = {
   'product-edit':  el => productModal(state.productMap[el.dataset.id]),
   'product-del':   deleteProduct,
   'user-new':      userModal,
+  'change-password': passwordModal,
   'user-del':      deleteUser,
   'toggle-pw':     togglePasswordVisibility,
   'refresh-page':  () => location.reload()
@@ -468,6 +472,18 @@ const formHandlers = {
     closeModal();
     toast(id ? 'Produk diperbarui' : 'Produk ditambahkan', 'ok');
     await reload();
+  },
+
+  async password(form, data) {
+    if (data.new_password !== data.confirm) {
+      throw validationError({ confirm: 'Konfirmasi password tidak sama' });
+    }
+    await api('/auth/password', {
+      method: 'PATCH',
+      body: { current_password: data.current_password, new_password: data.new_password }
+    });
+    closeModal();
+    toast('Password diganti. Perangkat lain perlu masuk lagi.', 'ok');
   },
 
   async 'user-create'(form, data) {

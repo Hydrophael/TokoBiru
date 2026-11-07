@@ -313,6 +313,7 @@ export function renderShell() {
     <div class="top-r">
       ${customer ? `<button class="btn cart-btn" data-act="open-cart">${icon('cart')}<span class="hide-m">Keranjang</span><span class="count num" id="cart-count">0</span></button>` : ''}
       <div class="who"><b>${escapeHtml(user.name)}</b><span class="tag ${user.role}">${ROLE_LABEL[user.role]}</span></div>
+      <button class="btn sm" data-act="change-password" aria-label="Ganti password" title="Ganti password">${icon('key', 15)}</button>
       <button class="btn sm" data-act="logout" aria-label="Keluar">${icon('out', 15)}<span>Keluar</span></button>
     </div>
   </div></header>
@@ -753,6 +754,19 @@ export function userModal() {
       <div class="field"><label>Email</label><input class="input" name="email" type="email" required maxlength="120" placeholder="nama@email.com"></div>
       <div class="field"><label>Password</label><input class="input" name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="Minimal 8 karakter"></div>
       <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Buat akun</button></div></form>`);
+}
+
+// --- Akun ---
+
+export function passwordModal() {
+  openModal(`<h3>Ganti password</h3><p class="sub">Setelah diganti, perangkat lain yang sedang masuk akan keluar otomatis.</p>
+    <form data-form="password" novalidate><div class="form-alert" role="alert"></div>
+      <div class="field"><label>Password lama</label><input class="input" name="current_password" data-pw type="password" required maxlength="128" autocomplete="current-password"></div>
+      <div class="field"><label>Password baru</label><input class="input" name="new_password" data-pw type="password" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="Minimal 8 karakter"></div>
+      <div class="field"><label>Ulangi password baru</label><input class="input" name="confirm" data-pw type="password" required autocomplete="new-password"></div>
+      <p class="muted small" style="margin:-2px 0 10px">Minimal 8 karakter, berisi huruf dan angka.</p>
+      <label class="showpw"><input type="checkbox" data-act="toggle-pw"> Tampilkan password</label>
+      <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Ganti password</button></div></form>`);
 }
 
 // --- Log ---

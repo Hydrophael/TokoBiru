@@ -410,7 +410,7 @@ def object_id(value, label="ID"):
 # --------------------------------------------------------------------------- #
 # Serialisasi (dokumen Mongo -> JSON)
 # --------------------------------------------------------------------------- #
-HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key")
+HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key", "session_version")
 
 
 def serialize_value(value):
@@ -509,7 +509,8 @@ def current_user():
     uid = session.get("uid")
     if uid and OID_RE.fullmatch(str(uid)):
         user = get_db().users.find_one({"_id": ObjectId(uid)})
-        if user and user.get("active", True):
+        # session_version naik tiap ganti password: sesi lama (versi berbeda) tidak berlaku lagi
+        if user and user.get("active", True) and session.get("sv", 0) == user.get("session_version", 0):
             g.user = user
         else:
             session.clear()
@@ -592,6 +593,7 @@ def start_session(user):
     session.clear()
     session.permanent = True
     session["uid"] = str(user["_id"])
+    session["sv"] = user.get("session_version", 0)
     session["csrf"] = secrets.token_urlsafe(32)
 
 
@@ -604,11 +606,16 @@ def record_failed_login(db, user, now):
     db.users.update_one({"_id": user["_id"]}, {"$set": changes})
 
 
+def account_locked_error():
+    return ApiError(
+        f"Akun dikunci sementara karena terlalu banyak percobaan. Coba lagi dalam {LOCK_MINUTES} menit.", 429)
+
+
 @app.get("/api/auth/me")
 def auth_me():
+    user = current_user()   # bisa membersihkan sesi (akun nonaktif / sesi dicabut), jadi dipanggil sebelum membuat csrf
     if "csrf" not in session:
         session["csrf"] = secrets.token_urlsafe(32)
-    user = current_user()
     return jsonify({"user": public_user(user), "csrf": session["csrf"], "pay_info": PAY_INFO})
 
 
@@ -640,10 +647,7 @@ def auth_login():
     user = db.users.find_one({"$or": [{"username": identifier}, {"email": identifier}]})
     now = utcnow()
     if user and user.get("locked_until") and user["locked_until"] > now:
-        raise ApiError(
-            f"Akun dikunci sementara karena terlalu banyak percobaan. Coba lagi dalam {LOCK_MINUTES} menit.",
-            429,
-        )
+        raise account_locked_error()
     # Hash palsu tetap diperiksa agar waktu respons sama untuk akun yang tidak ada
     stored_hash = user["password_hash"] if user else DUMMY_HASH
     password_ok = check_password_hash(stored_hash, clean["password"])
@@ -668,6 +672,37 @@ def auth_logout():
     session.clear()
     session["csrf"] = secrets.token_urlsafe(32)
     return jsonify({"ok": True, "csrf": session["csrf"]})
+
+
+@app.patch("/api/auth/password")
+@login_required
+def auth_password():
+    form = Form(json_body())
+    form.password("current_password", "Password lama", enforce_policy=False)
+    form.password("new_password", "Password baru")
+    clean = form.done()
+    db = get_db()
+    user = current_user()
+    now = utcnow()
+    if user.get("locked_until") and user["locked_until"] > now:
+        raise account_locked_error()
+    # Password lama yang salah dihitung ke batas gagal login yang sama, supaya sesi yang dicuri tidak
+    # bisa dipakai menebak password lewat endpoint ini.
+    if not check_password_hash(user["password_hash"], clean["current_password"]):
+        record_failed_login(db, user, now)
+        audit("password_gagal", "password lama salah")
+        raise ApiError("Password lama salah", 422, {"current_password": "Password lama salah"})
+    if clean["new_password"] == clean["current_password"]:
+        message = "Password baru harus berbeda dari yang lama"
+        raise ApiError(message, 422, {"new_password": message})
+    db.users.update_one({"_id": user["_id"]}, {
+        "$set": {"password_hash": generate_password_hash(clean["new_password"]),
+                 "failed": 0, "locked_until": None},
+        "$inc": {"session_version": 1}})
+    # sesi yang dipakai sekarang ikut naik versi; sesi di perangkat lain tidak berlaku lagi
+    session["sv"] = db.users.find_one({"_id": user["_id"]}).get("session_version", 1)
+    audit("password_ubah", "")
+    return jsonify({"ok": True})
 
 
 # --------------------------------------------------------------------------- #
