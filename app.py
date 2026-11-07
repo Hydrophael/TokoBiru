@@ -11,6 +11,7 @@ Jalankan lokal
     python app.py create-master      # buat akun master pertama (sekali saja)
     python app.py seed-demo          # opsional: akun demo tiap role + contoh produk
     python app.py
+    (opsional: salin .env.example menjadi .env; dimuat otomatis bila python-dotenv terpasang)
 
 Environment variable
     MONGO_URI     alamat MongoDB (wajib di Vercel; lokal default mongodb://localhost:27017)
@@ -20,6 +21,7 @@ Environment variable
                   opsional: membuat akun master otomatis bila belum ada master
     PAY_INFO      opsional: instruksi pembayaran yang tampil di pesanan pelanggan
     PENDING_TTL_HOURS  opsional: batas jam bayar sebelum pesanan dibatalkan otomatis (default 24)
+    Variabel yang dibiarkan kosong diperlakukan sama seperti tidak diisi (memakai nilai bawaan).
 """
 import getpass
 import os
@@ -35,7 +37,7 @@ from bson import ObjectId
 from flask import (Flask, Response, g, has_request_context, jsonify, request,
                    send_from_directory, session)
 from pymongo import ASCENDING, DESCENDING, MongoClient
-from pymongo.errors import DuplicateKeyError, PyMongoError
+from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -43,11 +45,29 @@ from werkzeug.security import check_password_hash, generate_password_hash
 # Konfigurasi
 # --------------------------------------------------------------------------- #
 IS_VERCEL = bool(os.environ.get("VERCEL"))
-PAY_INFO = os.environ.get("PAY_INFO", "")[:200]
+
+if not IS_VERCEL:
+    # Lokal: baca file .env bila python-dotenv terpasang (variabel yang sudah diset tidak ditimpa)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
+
+def _env_str(name, default="", strip=True):
+    """Baca environment variable. Nilai kosong (mis. `MONGO_DB=` dari .env.example) dianggap belum diisi."""
+    value = os.environ.get(name) or ""
+    if not value.strip():
+        return default
+    return value.strip() if strip else value
+
+
+PAY_INFO = _env_str("PAY_INFO")[:200]
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 
-SECRET_KEY = os.environ.get("SECRET_KEY")
+SECRET_KEY = _env_str("SECRET_KEY")
 if not SECRET_KEY:
     if IS_VERCEL:
         raise RuntimeError("SECRET_KEY belum diset di Environment Variables Vercel.")
@@ -87,7 +107,7 @@ WIB_OFFSET = timedelta(hours=7)   # batas "hari ini" memakai waktu Indonesia Bar
 
 def _env_int(name, default, minimum=1):
     try:
-        return max(minimum, int(os.environ.get(name, default)))
+        return max(minimum, int(_env_str(name, str(default))))
     except ValueError:
         return default
 
@@ -128,7 +148,7 @@ def utcnow():
 
 
 def mongo_uri():
-    uri = os.environ.get("MONGO_URI")
+    uri = _env_str("MONGO_URI")
     if uri:
         return uri
     if IS_VERCEL:
@@ -136,11 +156,27 @@ def mongo_uri():
     return "mongodb://localhost:27017"
 
 
+def mongo_db_name():
+    return _env_str("MONGO_DB", "tokobiru")
+
+
 def migrate_legacy_collections(db):
     """Pindahkan data dari collection lama `products` ke `master_product` (sekali saja)."""
     names = db.list_collection_names()
     if LEGACY_PRODUCT_COLLECTION in names and PRODUCT_COLLECTION not in names:
         db[LEGACY_PRODUCT_COLLECTION].rename(PRODUCT_COLLECTION)
+
+
+def ensure_unique_order_code_index(db):
+    """Kode pesanan dipakai sebagai referensi pembayaran, jadi harus unik.
+
+    Bila data lama sudah memuat kode ganda, indeks tidak bisa dibuat. Aplikasi tetap berjalan
+    (jangan sampai gagal start) dan masalahnya dicatat agar kode ganda itu dirapikan manual.
+    """
+    try:
+        db.orders.create_index([("code", ASCENDING)], unique=True)
+    except OperationFailure as exc:
+        app.logger.error("Indeks unik orders.code gagal dibuat (ada kode ganda di data lama?): %s", exc)
 
 
 def ensure_indexes(db):
@@ -151,6 +187,10 @@ def ensure_indexes(db):
     db[PRODUCT_COLLECTION].create_index([("stock", ASCENDING)])
     db.orders.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
     db.orders.create_index([("status", ASCENDING), ("created_at", ASCENDING)])
+    # satu kunci idempotensi hanya boleh dipakai sekali per pelanggan (pesanan tanpa kunci tidak terkena)
+    db.orders.create_index([("user_id", ASCENDING), ("idem_key", ASCENDING)], unique=True,
+                           partialFilterExpression={"idem_key": {"$type": "string"}})
+    ensure_unique_order_code_index(db)
     db.logs.create_index([("ts", DESCENDING)])
 
 
@@ -159,7 +199,7 @@ def get_db():
     if _db is not None:
         return _db
     client = MongoClient(mongo_uri(), serverSelectionTimeoutMS=6000, appname="tokobiru")
-    db = client[os.environ.get("MONGO_DB", "tokobiru")]
+    db = client[mongo_db_name()]
     migrate_legacy_collections(db)
     ensure_indexes(db)
     _db = db
@@ -365,7 +405,7 @@ def object_id(value, label="ID"):
 # --------------------------------------------------------------------------- #
 # Serialisasi (dokumen Mongo -> JSON)
 # --------------------------------------------------------------------------- #
-HIDDEN_FIELDS = ("password_hash", "failed", "locked_until")
+HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key")
 
 
 def serialize_value(value):
@@ -528,6 +568,12 @@ def secure_headers(resp):
         resp.headers["Cache-Control"] = "no-store"
     elif resp.mimetype == "text/html":
         resp.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
+        resp.headers["Cache-Control"] = "no-cache"
+    elif request.path.startswith("/static/"):
+        # Modul JS saling mengimpor, jadi browser wajib memeriksa versi terbaru (ETag) sebelum memakai
+        # cache. Bila file tidak berubah server cukup membalas 304; setelah deploy tidak ada campuran
+        # file lama dan baru.
+        resp.headers["Cache-Control"] = "no-cache"
     return resp
 
 
@@ -721,8 +767,15 @@ def products_delete(product_id):
 # --------------------------------------------------------------------------- #
 # Routes: Pesanan
 # --------------------------------------------------------------------------- #
+ORDER_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"   # tanpa 0/O dan 1/I/L yang mudah tertukar saat diketik
+ORDER_CODE_LENGTH = 6          # 31^6 = hampir 900 juta kemungkinan per hari
+ORDER_CODE_ATTEMPTS = 5
+IDEMPOTENCY_KEY_RE = re.compile(r"[A-Za-z0-9_\-]{8,64}")
+
+
 def new_order_code():
-    return "TB-" + utcnow().strftime("%y%m%d") + "-" + secrets.token_hex(2).upper()
+    suffix = "".join(secrets.choice(ORDER_CODE_ALPHABET) for _ in range(ORDER_CODE_LENGTH))
+    return "TB-" + utcnow().strftime("%y%m%d") + "-" + suffix
 
 
 def parse_cart_items(items):
@@ -809,6 +862,60 @@ def reserve_stock(db, wanted):
     return reserved, lines
 
 
+class OrderReplay(Exception):
+    """Kunci idempotensi sudah dipakai: pesanan yang sama sudah tersimpan."""
+
+    def __init__(self, order):
+        super().__init__("order replay")
+        self.order = order
+
+
+def idempotency_key():
+    """Header Idempotency-Key (opsional). Klien mengirim kunci yang sama saat mengulang request yang
+    sama, sehingga jaringan yang putus tidak menghasilkan pesanan ganda."""
+    raw = request.headers.get("Idempotency-Key", "").strip()
+    if not raw:
+        return None
+    if not IDEMPOTENCY_KEY_RE.fullmatch(raw):
+        raise ApiError("Idempotency-Key tidak valid", 422)
+    return raw
+
+
+def replayed_order(db, user, key, wanted):
+    """Pesanan yang sudah dibuat dengan kunci ini (None bila belum ada).
+
+    Kunci yang sama untuk isi keranjang berbeda ditolak, bukan diam-diam mengembalikan pesanan lain.
+    """
+    if key is None:
+        return None
+    order = db.orders.find_one({"user_id": user["_id"], "idem_key": key})
+    if order is None:
+        return None
+    if {item["product_id"]: item["qty"] for item in order["items"]} != wanted:
+        raise ApiError("Kunci permintaan ini sudah dipakai untuk pesanan yang berbeda", 422)
+    return order
+
+
+def insert_order(db, order, user, key):
+    """Simpan pesanan dengan kode unik; kode diundi ulang bila bentrok.
+
+    Bila bentrokan ternyata karena kunci idempotensi (dua request yang sama berjalan bersamaan),
+    lempar OrderReplay berisi pesanan yang sudah tersimpan.
+    """
+    for _ in range(ORDER_CODE_ATTEMPTS):
+        order["code"] = new_order_code()
+        try:
+            db.orders.insert_one(order)
+            return order
+        except DuplicateKeyError:
+            order.pop("_id", None)   # insert_one menambahkan _id walau gagal
+            if key is not None:
+                existing = db.orders.find_one({"user_id": user["_id"], "idem_key": key})
+                if existing:
+                    raise OrderReplay(existing)
+    raise ApiError("Gagal membuat kode pesanan. Coba lagi.", 503)
+
+
 def check_status_change(user, current_status, new_status):
     """Pastikan perubahan status diizinkan untuk role ini."""
     if user["role"] == "user":
@@ -839,19 +946,28 @@ def orders_create():
     form.text("note", "Catatan", 0, 200, required=False, multiline=True)
     clean = form.done()
     wanted = parse_cart_items(data.get("items"))
+    key = idempotency_key()
 
     db = get_db()
     user = current_user()
+    previous = replayed_order(db, user, key, wanted)
+    if previous:   # request ulangan: kembalikan pesanan yang sudah ada, stok tidak dipotong lagi
+        return jsonify({"order": serialize(previous), "replayed": True}), 200
     sweep_expired_orders(db)   # lepaskan stok pesanan kedaluwarsa sebelum menghitung ketersediaan
     reserved, lines = reserve_stock(db, wanted)
     try:
         now = utcnow()
-        order = {"code": new_order_code(), "user_id": user["_id"], "username": user["username"],
+        order = {"user_id": user["_id"], "username": user["username"],
                  "items": lines, "total": sum(line["subtotal"] for line in lines),
                  "phone": clean["phone"], "address": clean["address"], "note": clean["note"],
                  "status": "pending", "created_at": now, "updated_at": now,
                  "expires_at": now + timedelta(hours=PENDING_TTL_HOURS)}
-        db.orders.insert_one(order)
+        if key:
+            order["idem_key"] = key
+        insert_order(db, order, user, key)
+    except OrderReplay as replay:   # request kembar yang berjalan bersamaan sudah menyimpan pesanannya
+        release_stock(db, reserved)
+        return jsonify({"order": serialize(replay.order), "replayed": True}), 200
     except Exception:
         release_stock(db, reserved)
         raise
@@ -1018,15 +1134,14 @@ def health():
 # --------------------------------------------------------------------------- #
 def bootstrap(db):
     """Buat akun master dari environment variable bila belum ada master."""
-    username, email, password = (
-        os.environ.get(key) for key in ("MASTER_USERNAME", "MASTER_EMAIL", "MASTER_PASSWORD")
-    )
+    username, email = (_env_str(key) for key in ("MASTER_USERNAME", "MASTER_EMAIL"))
+    password = _env_str("MASTER_PASSWORD", strip=False)   # password dipakai apa adanya
     if not (username and email and password):
         return
     try:
         if db.users.count_documents({"role": "master"}) == 0:
             db.users.insert_one(new_user_doc({
-                "name": os.environ.get("MASTER_NAME", "Master")[:50],
+                "name": _env_str("MASTER_NAME", "Master")[:50],
                 "username": username.strip().lower(),
                 "email": email.strip().lower(),
                 "password": password,

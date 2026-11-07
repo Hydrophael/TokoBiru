@@ -16,6 +16,7 @@ import {
   hooks,
   icon,
   isCustomer,
+  newRequestKey,
   priceHtml,
   productEmoji,
   state,
@@ -177,6 +178,7 @@ async function logout() {
 
   state.user = null;
   state.cart = {};
+  state.checkout = null;
   state.query = '';
   state.category = '';
   renderAuth('login');
@@ -246,7 +248,7 @@ function openCheckout() {
 
   closeCart();
   const total = cartTotal(lines);
-  const profile = storage.get(STORAGE_KEYS.profile) || {};
+  const profile = storage.get(STORAGE_KEYS.profile(state.user.id)) || {};
   const summary = lines.map(({ product, qty }) =>
     `<li><span>${productEmoji(product)} ${escapeHtml(product.name)} <em>× ${qty}</em></span><b class="num">${formatRupiah(product.price * qty)}</b></li>`
   ).join('');
@@ -419,6 +421,29 @@ function showErrors(form, err) {
 // bentuknya sama dengan error dari server
 const validationError = fields => createError('Periksa kembali isian Anda', { fields });
 
+// Satu kunci per isi keranjang. Bila respons hilang di jalan lalu pelanggan mengulang, server mengembalikan
+// pesanan yang sudah dibuat, bukan membuat pesanan kedua. Kunci kedaluwarsa agar keranjang yang sama
+// berjam-jam kemudian tidak "menghidupkan" pesanan lama.
+const CHECKOUT_KEY_TTL_MS = 10 * 60 * 1000;
+
+function checkoutKey(items) {
+  const signature = JSON.stringify(items);
+  const current = state.checkout;
+  const fresh = current && current.signature === signature && Date.now() - current.at < CHECKOUT_KEY_TTL_MS;
+  if (!fresh) state.checkout = { signature, key: newRequestKey(), at: Date.now() };
+  return state.checkout.key;
+}
+
+// Stok berubah sejak katalog dimuat: tutup form, muat ulang katalog, dan tampilkan keranjang yang sudah disesuaikan
+async function refreshAfterStockConflict(err) {
+  closeModal();
+  toast(err.message, 'err');
+  if (state.view === 'shop') await reload();   // sekaligus menggambar ulang kartu produk
+  else await loadProducts();
+  drawCart();
+  openCart();
+}
+
 // handler submit per data-form; lempar error untuk ditampilkan
 const formHandlers = {
   async login(form, data) {
@@ -459,14 +484,23 @@ const formHandlers = {
     }
 
     const address = data.address.trim();
-    storage.set(STORAGE_KEYS.profile, { phone, address });
+    storage.set(STORAGE_KEYS.profile(state.user.id), { phone, address });
 
     const items = cartLines().map(line => ({ product_id: line.product.id, qty: line.qty }));
-    const result = await api('/orders', {
-      method: 'POST',
-      body: { items, phone, address, note: data.note }
-    });
+    let result;
+    try {
+      result = await api('/orders', {
+        method: 'POST',
+        body: { items, phone, address, note: data.note },
+        headers: { 'Idempotency-Key': checkoutKey(items) }
+      });
+    } catch (err) {
+      // 409: stok tidak cukup, 404: produk sudah dihapus. Katalog di layar sudah basi.
+      if (err.status === 409 || err.status === 404) return refreshAfterStockConflict(err);
+      throw err;
+    }
 
+    state.checkout = null;
     state.cart = {};
     closeModal();
     await show('orders');
@@ -638,6 +672,7 @@ function bindEvents() {
 // === Mulai ===
 
 async function boot() {
+  storage.remove(STORAGE_KEYS.legacyProfile);   // buang profil lama yang bisa memuat data pengguna sebelumnya
   bindEvents();
 
   try {

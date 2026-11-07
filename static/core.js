@@ -26,7 +26,8 @@ export const NAV = [
 ];
 
 export const STORAGE_KEYS = {
-  profile: 'tb_profile',
+  profile: userId => 'tb_profile_' + userId,   // per pengguna: perangkat bersama tidak membocorkan HP/alamat
+  legacyProfile: 'tb_profile',                 // kunci lama tanpa ID pengguna, dibuang saat aplikasi dimuat
   cart: userId => 'tb_cart_' + userId
 };
 
@@ -93,6 +94,7 @@ export const state = {
   orderFilter: '',
   justUpdatedOrderId: null,
   fresh: false,          // true saat halaman baru dibuka (animasi masuk hanya saat itu)
+  checkout: null,        // { signature, key, at }: kunci idempotensi untuk percobaan checkout yang sama
   stats: null,
   users: [],
   logs: []
@@ -130,6 +132,12 @@ export const hashString = text => [...String(text)].reduce((acc, ch) => (acc * 3
 
 export const createError = (message, extra) => Object.assign(new Error(message), extra);
 
+// Kunci acak untuk satu percobaan request (dikirim sebagai header Idempotency-Key)
+export function newRequestKey() {
+  if (crypto.randomUUID) return crypto.randomUUID();   // randomUUID hanya ada di konteks aman (https/localhost)
+  return [...crypto.getRandomValues(new Uint8Array(16))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
 // --- Penyimpanan lokal (aman terhadap error / mode privat) ---
 export const storage = {
   get(key) {
@@ -137,6 +145,9 @@ export const storage = {
   },
   set(key, value) {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* abaikan */ }
+  },
+  remove(key) {
+    try { localStorage.removeItem(key); } catch { /* abaikan */ }
   }
 };
 
@@ -171,10 +182,10 @@ export const payRow = (label, value, copyText, copyLabel = label) =>
 // Diisi oleh app.js supaya api() tidak perlu mengenal tampilan (menghindari import melingkar)
 export const hooks = { onSessionExpired() {} };
 
-export async function api(path, { method = 'GET', body } = {}) {
+export async function api(path, { method = 'GET', body, headers } = {}) {
   const options = {
     method,
-    headers: { 'Accept': 'application/json' },
+    headers: { 'Accept': 'application/json', ...headers },
     credentials: 'same-origin'
   };
   if (method !== 'GET') {
