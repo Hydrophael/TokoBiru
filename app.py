@@ -21,6 +21,7 @@ Environment variable
                   opsional: membuat akun master otomatis bila belum ada master
     PAY_INFO      opsional: instruksi pembayaran yang tampil di pesanan pelanggan
     PENDING_TTL_HOURS  opsional: batas jam bayar sebelum pesanan dibatalkan otomatis (default 24)
+    MAX_PENDING_ORDERS opsional: jumlah pesanan belum dibayar yang boleh dimiliki satu pelanggan (default 3)
     Variabel yang dibiarkan kosong diperlakukan sama seperti tidak diisi (memakai nilai bawaan).
 """
 import getpass
@@ -114,6 +115,8 @@ def _env_int(name, default, minimum=1):
 
 # Pesanan yang belum dibayar dibatalkan otomatis dan stoknya dikembalikan
 PENDING_TTL_HOURS = _env_int("PENDING_TTL_HOURS", 24)
+# Stok ditahan sejak pesanan dibuat, jadi satu akun tidak boleh menumpuk pesanan yang belum dibayar
+MAX_PENDING_ORDERS = _env_int("MAX_PENDING_ORDERS", 3)
 EXPIRE_SWEEP_SECONDS = 60   # jeda minimum antar penyapuan per instance
 EXPIRE_BATCH = 50
 MAX_QTY_PER_PRODUCT = 99
@@ -187,6 +190,8 @@ def ensure_indexes(db):
     db[PRODUCT_COLLECTION].create_index([("stock", ASCENDING)])
     db.orders.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
     db.orders.create_index([("status", ASCENDING), ("created_at", ASCENDING)])
+    # daftar pesanan staf, "pesanan terbaru" di dashboard, dan ringkasan hari ini hanya memakai created_at
+    db.orders.create_index([("created_at", DESCENDING)])
     # satu kunci idempotensi hanya boleh dipakai sekali per pelanggan (pesanan tanpa kunci tidak terkena)
     db.orders.create_index([("user_id", ASCENDING), ("idem_key", ASCENDING)], unique=True,
                            partialFilterExpression={"idem_key": {"$type": "string"}})
@@ -925,6 +930,23 @@ def check_status_change(user, current_status, new_status):
         raise ApiError(f"Status tidak bisa berubah dari '{current_status}' ke '{new_status}'", 422)
 
 
+def enforce_pending_limit(db, user):
+    """Tolak pesanan baru bila pelanggan sudah punya terlalu banyak pesanan yang belum dibayar.
+
+    Stok dipotong saat pesanan dibuat dan ditahan sampai pesanan dibayar atau kedaluwarsa, jadi tanpa
+    batas ini satu akun bisa mengosongkan rak tanpa membayar. Memakai status 429, bukan 409, karena
+    frontend menganggap 409 sebagai konflik stok dan memuat ulang katalog. Pengecekan ini tidak atomik:
+    dua request bersamaan bisa melewati batas satu-dua pesanan, yang masih bisa diterima.
+    """
+    pending = db.orders.count_documents({"user_id": user["_id"], "status": "pending"})
+    if pending >= MAX_PENDING_ORDERS:
+        raise ApiError(
+            f"Anda masih punya {pending} pesanan yang belum dibayar. "
+            "Bayar atau batalkan salah satunya di menu Pesanan sebelum membuat yang baru.",
+            429,
+        )
+
+
 @app.get("/api/orders")
 @login_required
 def orders_list():
@@ -954,6 +976,7 @@ def orders_create():
     if previous:   # request ulangan: kembalikan pesanan yang sudah ada, stok tidak dipotong lagi
         return jsonify({"order": serialize(previous), "replayed": True}), 200
     sweep_expired_orders(db)   # lepaskan stok pesanan kedaluwarsa sebelum menghitung ketersediaan
+    enforce_pending_limit(db, user)
     reserved, lines = reserve_stock(db, wanted)
     try:
         now = utcnow()
