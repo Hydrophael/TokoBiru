@@ -774,27 +774,29 @@ export function passwordModal() {
       <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Ganti password</button></div></form>`);
 }
 
-// Angka ini sama dengan RESET_CODE_MINUTES dan RESET_COOLDOWN_SECONDS di app.py
-const RESET_CODE_MINUTES = 15;
-const RESET_RETRY_MINUTES = 2;
+// Jeda kirim ulang dan masa berlaku kode datang dari server (respons /auth/forgot), supaya angkanya tidak ganda di sini
 
-export function forgotModal() {
+export function forgotModal(email = '') {
   openModal(`<h3>Lupa password</h3><p class="sub">Masukkan email akun Anda. Kami kirim kode 6 angka untuk membuat password baru.</p>
     <form data-form="forgot" novalidate><div class="form-alert" role="alert"></div>
-      <div class="field"><label>Email</label><input class="input" name="email" type="email" required maxlength="120" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="nama@email.com"></div>
+      <div class="field"><label>Email</label><input class="input" name="email" type="email" required maxlength="120" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="nama@email.com" value="${escapeHtml(email)}"></div>
       <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Kirim kode</button></div></form>`);
 }
 
-export function resetModal(email) {
+export function resetModal(email, { retryAfter = 120, expiresMinutes = 15 } = {}) {
   // input tersembunyi sengaja di bawah: kolom pertama di modal otomatis mendapat fokus
-  openModal(`<h3>Masukkan kode</h3><p class="sub">Jika ${escapeHtml(email)} terdaftar, kode 6 angka sudah dikirim dan berlaku ${RESET_CODE_MINUTES} menit. Cek juga folder spam.</p>
-    <form data-form="reset" novalidate><div class="form-alert" role="alert"></div>
-      <div class="field"><label>Kode 6 angka</label><input class="input num" name="code" inputmode="numeric" autocomplete="one-time-code" required maxlength="6" placeholder="123456"></div>
+  openModal(`<h3>Masukkan kode</h3><p class="sub">Jika akun dengan email <b class="email-chip">${escapeHtml(email)}</b> terdaftar, kode 6 angka sudah dikirim dan berlaku ${expiresMinutes} menit. Cek juga folder spam. <button type="button" class="linkbtn" data-act="forgot-change" data-email="${escapeHtml(email)}">Salah email?</button></p>
+    <form data-form="reset" data-pwcheck novalidate><div class="form-alert" role="alert"></div>
+      <div class="field"><label>Kode 6 angka</label><input class="input code-input num" name="code" data-digits inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" required maxlength="6" placeholder="123456"></div>
       <div class="field"><label>Password baru</label><input class="input" name="new_password" data-pw type="password" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="Minimal 8 karakter"></div>
       <div class="field"><label>Ulangi password baru</label><input class="input" name="confirm" data-pw type="password" required autocomplete="new-password"></div>
       <input type="hidden" name="email" value="${escapeHtml(email)}">
-      <p class="muted small" style="margin:-2px 0 10px">Minimal 8 karakter, berisi huruf dan angka. Belum menerima kode? Tutup, lalu minta lagi setelah ${RESET_RETRY_MINUTES} menit.</p>
+      <ul class="pw-checks" aria-label="Syarat password">
+        <li data-check="len">Minimal 8 karakter</li><li data-check="letter">Ada huruf</li>
+        <li data-check="digit">Ada angka</li><li data-check="match">Kedua password sama</li>
+      </ul>
       <label class="showpw"><input type="checkbox" data-act="toggle-pw"> Tampilkan password</label>
+      <div class="resend"><span>Belum menerima kode?</span><button type="button" class="linkbtn" data-act="forgot-resend" disabled>Kirim ulang dalam ${Math.floor(retryAfter / 60)}:${String(retryAfter % 60).padStart(2, '0')}</button></div>
       <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Ganti password</button></div></form>`);
 }
 

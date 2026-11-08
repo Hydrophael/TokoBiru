@@ -595,3 +595,15 @@ html.lock{overflow:hidden}
 .auth-art::before{animation:fade 1.8s ease .2s backwards}
 .auth-art::after{animation:ringin 1.8s var(--ease) .1s backwards}
 .auth-card{animation:pop .7s var(--ease) .25s backwards}
+
+/* Lupa password */
+.email-chip{font-weight:700;color:var(--ink);word-break:break-all}
+.code-input{font-size:1.6rem;font-weight:700;letter-spacing:.45em;text-align:center;padding-left:calc(14px + .45em)}
+.code-input::placeholder{font-weight:500;letter-spacing:.3em}
+.pw-checks{list-style:none;margin:-4px 0 14px;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;font-size:.88rem;color:var(--ink2)}
+.pw-checks li::before{content:'\25CB';display:inline-block;width:1.3em;font-weight:700}
+.pw-checks li[data-ok]{color:var(--ok);font-weight:600}
+.pw-checks li[data-ok]::before{content:'\2713'}
+.resend{display:flex;flex-wrap:wrap;align-items:center;gap:2px 8px;font-size:.92rem;color:var(--ink2);margin:0 0 14px}
+.resend .linkbtn:disabled{color:var(--muted);text-decoration:none;cursor:default;font-variant-numeric:tabular-nums}
+@media(max-width:420px){.pw-checks{grid-template-columns:1fr}}

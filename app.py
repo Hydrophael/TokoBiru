@@ -40,6 +40,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from functools import wraps
+from html import escape as html_escape
 
 from bson import ObjectId
 from flask import (Flask, Response, g, has_request_context, jsonify, request,
@@ -144,8 +145,8 @@ SMTP_FROM = _env_str("SMTP_FROM", SMTP_USER)
 SMTP_TIMEOUT = 8            # detik; fungsi serverless tidak boleh menunggu server email terlalu lama
 EMAIL_ENABLED = bool(SMTP_HOST and SMTP_FROM)
 RESET_CODE_LENGTH = 6
-RESET_CODE_MINUTES = 15     # masa berlaku kode (frontend menyebut angka yang sama di views.js)
-RESET_COOLDOWN_SECONDS = 120   # jeda minimum antar permintaan kode per akun (frontend: "2 menit")
+RESET_CODE_MINUTES = 15     # masa berlaku kode (dikirim ke frontend lewat respons /auth/forgot)
+RESET_COOLDOWN_SECONDS = 120   # jeda minimum antar permintaan kode per akun (dipakai frontend untuk hitung mundur)
 MAX_RESET_ATTEMPTS = 5      # tebakan kode yang boleh salah sebelum reset dikunci (terpisah dari kunci login)
 RESET_LOCK_MINUTES = 10
 
@@ -742,13 +743,15 @@ RESET_FIELDS = {"reset_code_hash": "", "reset_expires": "", "reset_sent_at": ""}
 RESET_GUARD_FIELDS = {"reset_failed": "", "reset_locked_until": ""}
 
 
-def send_email(to, subject, body):
-    """Kirim email teks lewat SMTP. Dipisah dari route supaya mudah diganti di tes."""
+def send_email(to, subject, body, html=None):
+    """Kirim email lewat SMTP: teks biasa, plus versi HTML bila `html` diberikan. Dipisah dari route supaya mudah diganti di tes."""
     message = EmailMessage()
     message["From"] = SMTP_FROM
     message["To"] = to
     message["Subject"] = subject
     message.set_content(body)
+    if html:
+        message.add_alternative(html, subtype="html")
     use_ssl = SMTP_PORT == 465
     server = (smtplib.SMTP_SSL if use_ssl else smtplib.SMTP)(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT)
     with server:
@@ -757,6 +760,34 @@ def send_email(to, subject, body):
         if SMTP_USER:
             server.login(SMTP_USER, SMTP_PASSWORD)
         server.send_message(message)
+
+
+def reset_email_text(name, code):
+    return (f"Halo {name},\n\n"
+            f"Kode reset password TokoBiru Anda: {code}\n\n"
+            f"Kode berlaku {RESET_CODE_MINUTES} menit dan hanya bisa dipakai sekali.\n"
+            "Jangan bagikan kode ini kepada siapa pun, termasuk yang mengaku dari TokoBiru.\n"
+            "Jika Anda tidak merasa memintanya, abaikan email ini; password Anda tidak berubah.\n")
+
+
+def reset_email_html(name, code):
+    """Versi HTML email kode reset. Hanya `name` yang berasal dari data pengguna, dan di-escape."""
+    name = html_escape(name)
+    return f"""<!DOCTYPE html>
+<html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:24px 12px;background:#eef4fb;font-family:Arial,Helvetica,sans-serif;color:#0c2342">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
+<table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%;background:#ffffff;border-radius:14px;overflow:hidden">
+<tr><td style="background:#0b5fc4;padding:20px 28px;color:#ffffff;font-size:20px;font-weight:bold"><span style="color:#ffc61a">&#9679;</span>&nbsp; TokoBiru</td></tr>
+<tr><td style="padding:28px">
+<p style="margin:0 0 12px;font-size:16px;line-height:1.5">Halo {name},</p>
+<p style="margin:0 0 16px;font-size:16px;line-height:1.5">Gunakan kode ini untuk membuat password baru:</p>
+<p style="margin:0 0 20px;padding:16px;background:#e3eefc;border-radius:10px;text-align:center;font-size:32px;font-weight:bold;letter-spacing:8px;font-family:Consolas,Menlo,monospace;color:#0a4ea3">{code}</p>
+<p style="margin:0 0 12px;font-size:14px;line-height:1.6">Kode berlaku {RESET_CODE_MINUTES} menit dan hanya bisa dipakai sekali. Jangan bagikan kode ini kepada siapa pun, termasuk yang mengaku dari TokoBiru.</p>
+<p style="margin:0;font-size:14px;line-height:1.6;color:#566f89">Jika Anda tidak merasa memintanya, abaikan email ini; password Anda tidak berubah.</p>
+</td></tr></table>
+</td></tr></table>
+</body></html>"""
 
 
 def new_reset_code():
@@ -802,17 +833,16 @@ def auth_forgot():
             "reset_expires": now + timedelta(minutes=RESET_CODE_MINUTES),
             "reset_sent_at": now}})
         try:
-            send_email(
-                user["email"], "Kode reset password TokoBiru",
-                f"Kode reset password TokoBiru Anda: {code}\n\n"
-                f"Kode berlaku {RESET_CODE_MINUTES} menit dan hanya bisa dipakai sekali.\n"
-                "Jika Anda tidak merasa memintanya, abaikan email ini; password Anda tidak berubah.\n")
+            name = user.get("name") or "pelanggan"
+            send_email(user["email"], "Kode reset password TokoBiru",
+                       reset_email_text(name, code), html=reset_email_html(name, code))
         except Exception as exc:   # smtplib punya banyak jenis error; apa pun yang terjadi, kode tidak jadi dipakai
             app.logger.error("Gagal mengirim email reset password: %s", exc)
             db.users.update_one({"_id": user["_id"]}, {"$unset": RESET_FIELDS})   # boleh langsung coba lagi
         else:
             audit("reset_minta", "kode dikirim ke email", user)
-    return jsonify({"ok": True})
+    # Angka konstan, sama untuk email terdaftar maupun tidak: frontend memakainya untuk hitung mundur dan teks bantuan
+    return jsonify({"ok": True, "retry_after": RESET_COOLDOWN_SECONDS, "expires_minutes": RESET_CODE_MINUTES})
 
 
 @app.post("/api/auth/reset")
