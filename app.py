@@ -34,6 +34,7 @@ import os
 import re
 import secrets
 import smtplib
+import ssl
 import sys
 import time
 import unicodedata
@@ -146,7 +147,7 @@ SMTP_TIMEOUT = 8            # detik; fungsi serverless tidak boleh menunggu serv
 EMAIL_ENABLED = bool(SMTP_HOST and SMTP_FROM)
 RESET_CODE_LENGTH = 6
 RESET_CODE_MINUTES = 15     # masa berlaku kode (dikirim ke frontend lewat respons /auth/forgot)
-RESET_COOLDOWN_SECONDS = 120   # jeda minimum antar permintaan kode per akun (dipakai frontend untuk hitung mundur)
+RESET_COOLDOWN_SECONDS = 60    # jeda minimum antar permintaan kode per akun (dipakai frontend untuk hitung mundur)
 MAX_RESET_ATTEMPTS = 5      # tebakan kode yang boleh salah sebelum reset dikunci (terpisah dari kunci login)
 RESET_LOCK_MINUTES = 10
 
@@ -753,10 +754,15 @@ def send_email(to, subject, body, html=None):
     if html:
         message.add_alternative(html, subtype="html")
     use_ssl = SMTP_PORT == 465
-    server = (smtplib.SMTP_SSL if use_ssl else smtplib.SMTP)(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT)
+    # Konteks bawaan smtplib TIDAK memeriksa sertifikat server; create_default_context() memeriksanya
+    context = ssl.create_default_context()
+    if use_ssl:
+        server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT, context=context)
+    else:
+        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT)
     with server:
         if not use_ssl:
-            server.starttls()
+            server.starttls(context=context)
         if SMTP_USER:
             server.login(SMTP_USER, SMTP_PASSWORD)
         server.send_message(message)
@@ -900,6 +906,52 @@ def auth_reset():
             raise reset_locked_error()
         audit("reset_gagal", "kode salah", user)
     # Pesan sama untuk email tak dikenal, tanpa kode aktif, kode salah, dan kode kedaluwarsa
+    raise ApiError(RESET_FAILED_ERROR, 422, {"code": "Kode salah atau sudah kedaluwarsa"})
+
+
+@app.post("/api/auth/reset/check")
+def auth_reset_check():
+    """Periksa kode reset TANPA memakainya, supaya layar kode bisa menolak kode salah sebelum meminta password baru.
+
+    Memakai penghitung tebakan yang sama dengan /auth/reset: tebakan salah di sini dan di sana dijumlahkan,
+    jadi endpoint ini bukan jalan memutar untuk menebak lebih dari batas. Tebakan yang benar dikembalikan
+    jatahnya dan kodenya tetap berlaku; yang memakainya hanya /auth/reset. Jawaban untuk email tak dikenal,
+    tanpa kode aktif, kode salah, dan kedaluwarsa sama persis."""
+    require_email_enabled()
+    form = Form(json_body())
+    form.text("email", "Email", 5, 120, lower=True, regex=EMAIL_RE, regex_msg=EMAIL_ERROR)
+    form.text("code", "Kode", RESET_CODE_LENGTH, RESET_CODE_LENGTH, regex=RESET_CODE_RE, regex_msg=RESET_CODE_ERROR)
+    clean = form.done()
+    db = get_db()
+    user = db.users.find_one({"email": clean["email"]})
+    now = utcnow()
+    pending = bool(user and user.get("active", True) and user.get("reset_code_hash")
+                   and user.get("reset_expires") and user["reset_expires"] > now)
+    if pending:
+        attempt = db.users.find_one_and_update(
+            {"_id": user["_id"], "reset_expires": {"$gt": now}, "reset_code_hash": {"$exists": True},
+             "$or": [{"reset_locked_until": {"$exists": False}}, {"reset_locked_until": None},
+                     {"reset_locked_until": {"$lte": now}}]},
+            {"$inc": {"reset_failed": 1}},
+            return_document=ReturnDocument.AFTER)
+        locked_until = user.get("reset_locked_until")
+        if attempt is None:
+            if locked_until and locked_until > now:
+                raise reset_locked_error()
+            raise ApiError(RESET_FAILED_ERROR, 422, {"code": "Kode salah atau sudah kedaluwarsa"})
+        tries = attempt.get("reset_failed", 1)
+        if tries > MAX_RESET_ATTEMPTS:
+            lock_reset(db, user, now)
+            raise reset_locked_error()
+        if hmac.compare_digest(str(attempt.get("reset_code_hash", "")), reset_code_digest(user["_id"], clean["code"])):
+            # kode benar: kembalikan jatah tebakan yang barusan diambil; kode tetap berlaku sampai /auth/reset
+            db.users.update_one({"_id": user["_id"], "reset_failed": {"$gt": 0}}, {"$inc": {"reset_failed": -1}})
+            return jsonify({"ok": True})
+        if tries >= MAX_RESET_ATTEMPTS:
+            lock_reset(db, user, now)
+            audit("reset_gagal", "kode salah, reset dikunci sementara", user)
+            raise reset_locked_error()
+        audit("reset_gagal", "kode salah", user)
     raise ApiError(RESET_FAILED_ERROR, 422, {"code": "Kode salah atau sudah kedaluwarsa"})
 
 

@@ -193,3 +193,30 @@ export function confirmAccepted() {
   closeModal();
   if (resolve) resolve(true);
 }
+
+// Konfeti kecil berwarna merek (kuning dan biru) memercik dari sebuah elemen, mis. centang "berhasil"
+export function burst(el, count = 18) {
+  if (reducedMotion.matches || !el || !el.isConnected) return;
+
+  const box = el.getBoundingClientRect();
+  const originX = box.left + box.width / 2;
+  const originY = box.top + box.height / 2;
+  const colors = ['var(--accent)', 'var(--blue)', 'var(--mark-a)', 'var(--accent)', 'var(--ok)'];
+
+  for (let i = 0; i < count; i++) {
+    const piece = document.createElement('i');
+    piece.className = 'confetti';
+    piece.setAttribute('aria-hidden', 'true');
+    piece.style.cssText = `left:${originX}px;top:${originY}px;background:${colors[i % colors.length]}`;
+    document.body.appendChild(piece);
+
+    const angle = (Math.PI * 2 * i) / count + Math.random() * 0.4;
+    const distance = 70 + Math.random() * 70;
+    const dx = Math.cos(angle) * distance;
+    const dy = Math.sin(angle) * distance;
+    piece.animate([
+      { transform: 'translate(-50%,-50%) scale(1) rotate(0deg)', opacity: 1 },
+      { transform: `translate(calc(-50% + ${dx}px),calc(-50% + ${dy + 36}px)) scale(.55) rotate(${Math.round(Math.random() * 540 - 270)}deg)`, opacity: 0 }
+    ], { duration: 750 + Math.random() * 350, easing: 'cubic-bezier(.2,.8,.2,1)' }).onfinish = () => piece.remove();
+  }
+}

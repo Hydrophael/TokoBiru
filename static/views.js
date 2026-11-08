@@ -28,7 +28,7 @@ import {
   stockInfo,
   storage
 } from './core.js';
-import { EASE, linkLabels, openModal, reducedMotion, toast, tweenNumber } from './ui.js';
+import { EASE, burst, linkLabels, openModal, reducedMotion, toast, tweenNumber } from './ui.js';
 
 // === Modal pesanan berhasil ===
 
@@ -84,8 +84,12 @@ const registerFormHtml = () => `
       <div class="field"><label for="r-user">Username</label><input class="input" id="r-user" name="username"
         autocapitalize="none" spellcheck="false" placeholder="Pilih username unik" required maxlength="20" autocomplete="username"></div>
       </div>
+      <div class="pair">
       <div class="field"><label for="r-email">Email</label><input class="input" id="r-email" name="email"
-        type="email" placeholder="nama@email.com" required maxlength="120" autocomplete="email"></div>
+        type="email" placeholder="nama@email.com" required maxlength="120" autocomplete="email" autocapitalize="none" spellcheck="false"></div>
+      <div class="field"><label for="r-email2">Ulangi email</label><input class="input" id="r-email2" name="email_confirm"
+        type="email" placeholder="Ketik ulang email" required maxlength="120" autocomplete="off" autocapitalize="none" spellcheck="false"></div>
+      </div>
       <div class="pair">
       <div class="field"><label for="r-pw">Password</label><input class="input" id="r-pw" name="password"
         type="password" placeholder="Minimal 8 karakter" required minlength="8" maxlength="128" autocomplete="new-password" aria-describedby="r-pw-hint"></div>
@@ -774,30 +778,224 @@ export function passwordModal() {
       <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Ganti password</button></div></form>`);
 }
 
-// Jeda kirim ulang dan masa berlaku kode datang dari server (respons /auth/forgot), supaya angkanya tidak ganda di sini
+// --- Pemulihan password: satu modal bertahap (email -> kode -> password baru -> selesai) ---
+// Semua langkah dirender sekali lalu ditampilkan bergantian, jadi isian (mis. password) tidak hilang saat pengguna kembali.
 
-export function forgotModal(email = '') {
-  openModal(`<h3>Lupa password</h3><p class="sub">Masukkan email akun Anda. Kami kirim kode 6 angka untuk membuat password baru.</p>
-    <form data-form="forgot" novalidate><div class="form-alert" role="alert"></div>
-      <div class="field"><label>Email</label><input class="input" name="email" type="email" required maxlength="120" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="nama@email.com" value="${escapeHtml(email)}"></div>
-      <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Kirim kode</button></div></form>`);
+const RESET_STEP_NAMES = ['Email', 'Kode', 'Password'];
+const RESET_ANNOUNCE = {
+  1: 'Langkah 1 dari 3: isi email',
+  2: 'Langkah 2 dari 3: masukkan kode',
+  3: 'Langkah 3 dari 3: buat password baru',
+  4: 'Password berhasil diganti'
+};
+const OTP_LENGTH = 6;
+
+// Satu <input> asli (isi otomatis dari SMS/email dan tempel tetap berfungsi) dengan enam kotak hanya sebagai tampilan
+const otpHtml = () => `<div class="otp" data-otp>
+        <input class="otp-input" name="code" data-digits inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" aria-describedby="otp-hint">
+        <div class="otp-cells" aria-hidden="true">${Array.from({ length: OTP_LENGTH }, (_, k) => `<span class="otp-cell" style="--k:${k}"></span>`).join('')}</div>
+      </div>`;
+
+function resetWizardHtml(email) {
+  const steps = RESET_STEP_NAMES.map((name, index) =>
+    `<li data-s="${index + 1}"${index ? '' : ' class="now" aria-current="step"'}><i>${index + 1}</i><span>${name}</span></li>`
+  ).join('');
+
+  return `<div class="wz" data-keep data-step="1">
+    <div class="wz-top">
+      <ol class="wz-steps" aria-label="Langkah pemulihan password">${steps}</ol>
+      <button type="button" class="btn sm flat wz-close" data-act="close-modal" aria-label="Tutup">${icon('x', 18)}</button>
+    </div>
+    <div class="wz-body">
+      <section class="wz-panel" data-panel="1">
+        <h3>Lupa password</h3><p class="sub">Masukkan email akun Anda. Kami kirim kode 6 angka untuk membuat password baru.</p>
+        <form data-form="forgot" novalidate><div class="form-alert" role="alert"></div>
+          <div class="field"><label>Email</label><input class="input" name="email" type="email" required maxlength="120" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="nama@email.com" value="${escapeHtml(email)}"></div>
+          <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Kirim kode</button></div></form>
+      </section>
+      <section class="wz-panel" data-panel="2" hidden>
+        <h3>Masukkan kode</h3><p class="sub">Jika akun dengan email <b class="email-chip" data-email></b> terdaftar, kode 6 angka sudah dikirim dan berlaku <span data-expires>15</span> menit. Cek juga folder spam.</p>
+        <form data-form="code" novalidate><div class="form-alert" role="alert"></div>
+          <div class="field"><label>Kode 6 angka</label>${otpHtml()}</div>
+          <p class="otp-hint muted small" id="otp-hint">Ketik atau tempel 6 angka yang sudah dikirim.</p>
+          <div class="resend"><span>Belum menerima kode?</span><button type="button" class="linkbtn" data-act="forgot-resend" disabled>Kirim ulang kode</button><i class="resend-bar" aria-hidden="true"></i></div>
+          <div class="foot"><button type="button" class="btn" data-act="wiz-back">Ubah email</button><button type="submit" class="btn primary">Lanjut</button></div></form>
+      </section>
+      <section class="wz-panel" data-panel="3" hidden>
+        <h3>Buat password baru</h3><p class="sub">Pilih password yang belum pernah Anda pakai. Perangkat lain yang sedang masuk akan keluar otomatis.</p>
+        <form data-form="reset" data-pwcheck novalidate><div class="form-alert" role="alert"></div>
+          <div class="field"><label>Password baru</label><input class="input" name="new_password" data-pw type="password" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="Minimal 8 karakter"></div>
+          <div class="field"><label>Ulangi password baru</label><input class="input" name="confirm" data-pw type="password" required autocomplete="new-password"></div>
+          <ul class="pw-checks" aria-label="Syarat password">
+            <li data-check="len">Minimal 8 karakter</li><li data-check="letter">Ada huruf</li>
+            <li data-check="digit">Ada angka</li><li data-check="match">Kedua password sama</li>
+          </ul>
+          <label class="showpw"><input type="checkbox" data-act="toggle-pw"> Tampilkan password</label>
+          <div class="foot"><button type="button" class="btn" data-act="wiz-back">Kembali</button><button type="submit" class="btn primary">Ganti password</button></div></form>
+      </section>
+      <section class="wz-panel" data-panel="4" hidden>
+        <div class="done"><svg class="done-ic" viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="24"/><path d="M15 27l8 8 14-19"/></svg>
+          <h3>Password berhasil diganti</h3><p class="sub">Silakan masuk dengan password baru Anda.</p></div>
+        <div class="foot"><button type="button" class="btn primary block" data-act="wiz-finish">Masuk sekarang</button></div>
+      </section>
+    </div>
+    <p class="sr-only" id="wz-live" role="status" aria-live="polite"></p>
+  </div>`;
 }
 
-export function resetModal(email, { retryAfter = 120, expiresMinutes = 15 } = {}) {
-  // input tersembunyi sengaja di bawah: kolom pertama di modal otomatis mendapat fokus
-  openModal(`<h3>Masukkan kode</h3><p class="sub">Jika akun dengan email <b class="email-chip">${escapeHtml(email)}</b> terdaftar, kode 6 angka sudah dikirim dan berlaku ${expiresMinutes} menit. Cek juga folder spam. <button type="button" class="linkbtn" data-act="forgot-change" data-email="${escapeHtml(email)}">Salah email?</button></p>
-    <form data-form="reset" data-pwcheck novalidate><div class="form-alert" role="alert"></div>
-      <div class="field"><label>Kode 6 angka</label><input class="input code-input num" name="code" data-digits inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" required maxlength="6" placeholder="123456"></div>
-      <div class="field"><label>Password baru</label><input class="input" name="new_password" data-pw type="password" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="Minimal 8 karakter"></div>
-      <div class="field"><label>Ulangi password baru</label><input class="input" name="confirm" data-pw type="password" required autocomplete="new-password"></div>
-      <input type="hidden" name="email" value="${escapeHtml(email)}">
-      <ul class="pw-checks" aria-label="Syarat password">
-        <li data-check="len">Minimal 8 karakter</li><li data-check="letter">Ada huruf</li>
-        <li data-check="digit">Ada angka</li><li data-check="match">Kedua password sama</li>
-      </ul>
-      <label class="showpw"><input type="checkbox" data-act="toggle-pw"> Tampilkan password</label>
-      <div class="resend"><span>Belum menerima kode?</span><button type="button" class="linkbtn" data-act="forgot-resend" disabled>Kirim ulang dalam ${Math.floor(retryAfter / 60)}:${String(retryAfter % 60).padStart(2, '0')}</button></div>
-      <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Ganti password</button></div></form>`);
+export function forgotModal(email = '') {
+  state.reset = { email: '', sentTo: '', endAt: 0, code: '' };
+  openModal(resetWizardHtml(email));
+}
+
+// Isi teks bantu (email tujuan, masa berlaku kode) lewat textContent supaya aman dari injeksi HTML
+export function setResetInfo({ email, expires } = {}) {
+  if (email !== undefined) $$('#modal-root [data-email]').forEach(el => { el.textContent = email; });
+  if (expires !== undefined) $$('#modal-root [data-expires]').forEach(el => { el.textContent = expires; });
+}
+
+// Enam kotak mengikuti isi <input>: digit muncul membal, kotak aktif punya kursor
+export function renderOtp(wrap) {
+  const input = $('.otp-input', wrap);
+  if (!input) return;
+  const cells = $$('.otp-cell', wrap);
+  const value = input.value;
+  const previous = Number(wrap.dataset.len || 0);
+  const focused = document.activeElement === input;
+  const activeIndex = Math.min(value.length, cells.length - 1);
+
+  cells.forEach((cell, index) => {
+    const digit = value[index] || '';
+    if (cell.textContent !== digit) cell.textContent = digit;
+    cell.classList.toggle('filled', index < value.length);
+    cell.classList.toggle('active', focused && index === activeIndex);
+    if (index >= previous && index < value.length) {
+      cell.classList.remove('pop');
+      void cell.offsetWidth;   // paksa reflow agar animasi mulai ulang
+      cell.classList.add('pop');
+    }
+  });
+
+  wrap.dataset.len = value.length;
+  if (value.length < cells.length) wrap.classList.remove('wave');
+}
+
+// Penanda langkah: garis penghubung terisi, langkah selesai berubah jadi centang
+function setStepper(wz, step) {
+  $$('.wz-steps li', wz).forEach(li => {
+    const n = Number(li.dataset.s);
+    const done = n < step;
+    li.classList.toggle('done', done);
+    li.classList.toggle('now', n === step);
+    if (n === step) li.setAttribute('aria-current', 'step');
+    else li.removeAttribute('aria-current');
+
+    const mark = $('i', li);
+    const kind = done ? 'check' : 'num';
+    if (mark.dataset.kind !== kind) {
+      mark.dataset.kind = kind;
+      mark.innerHTML = done ? icon('check', 14) : String(n);
+    }
+  });
+}
+
+// Judul langkah yang sedang tampil menjadi nama dialog (dibaca pembaca layar)
+function markTitle(wz, panel) {
+  $$('h3', wz).forEach(heading => heading.removeAttribute('id'));
+  const heading = $('h3', panel);
+  if (heading) {
+    heading.id = 'modal-title';
+    heading.tabIndex = -1;
+  }
+  const modal = $('#modal-root .modal');
+  if (modal) modal.setAttribute('aria-labelledby', 'modal-title');
+}
+
+function focusPanel(panel) {
+  const target = $('input:not([type=checkbox]):not([type=hidden])', panel) || $('.btn.primary', panel);
+  if (target) target.focus();
+}
+
+// Judul, teks, kolom isian, dan tombol muncul satu per satu dari arah perpindahan
+function staggerPanel(panel, direction) {
+  if (reducedMotion.matches) return;
+  const parts = $$(':scope > h3, :scope > p, :scope > form > *, :scope > .done > *', panel)
+    .filter(el => el.getClientRects().length);
+  parts.forEach((el, index) => el.animate(
+    [{ opacity: 0, transform: `translate(${direction * 14}px, 8px)` }, { opacity: 1, transform: 'none' }],
+    { duration: 300, delay: index * 28, easing: EASE, fill: 'backwards' }
+  ));
+}
+
+// Konfeti kecil setelah centang selesai tergambar
+function celebrate(panel) {
+  setTimeout(() => {
+    const mark = $('.done-ic', panel);
+    if (mark && mark.isConnected) burst(mark);
+  }, 420);
+}
+
+// Pindah langkah: isi lama keluar, tinggi modal menyesuaikan dengan mulus, isi baru masuk berurutan.
+// Panggilan beruntun aman: yang terakhir menang dan panel yang sedang tampil selalu dibaca dari DOM.
+let wizardToken = 0;
+
+export async function showResetStep(step) {
+  const wz = $('#modal-root .wz');
+  if (!wz) return;
+  const next = $(`.wz-panel[data-panel="${step}"]`, wz);
+  const current = $('.wz-panel:not([hidden])', wz);
+  const body = $('.wz-body', wz);
+  if (!next || !current || !body) return;
+
+  const token = ++wizardToken;
+  wz.dataset.step = step;
+  setStepper(wz, step);
+  const live = $('#wz-live', wz);
+  if (live) live.textContent = RESET_ANNOUNCE[step] || '';
+
+  if (current === next) {   // sudah di langkah ini (mis. tekan dua kali): batalkan animasi keluar yang tertunda
+    next.getAnimations().forEach(animation => animation.cancel());
+    next.style.pointerEvents = '';
+    body.style.overflow = '';
+    focusPanel(next);
+    return;
+  }
+
+  const direction = step > Number(current.dataset.panel) ? 1 : -1;
+  const reveal = () => {
+    current.getAnimations().forEach(animation => animation.cancel());
+    current.hidden = true;
+    current.style.pointerEvents = '';
+    next.hidden = false;
+    markTitle(wz, next);
+    focusPanel(next);
+    if (step === 4) celebrate(next);
+  };
+
+  if (reducedMotion.matches) {
+    reveal();
+    return;
+  }
+
+  const fromHeight = body.offsetHeight;
+  body.getAnimations().forEach(animation => animation.cancel());
+  body.style.overflow = 'clip';        // geseran samping tidak boleh memunculkan scrollbar
+  current.style.pointerEvents = 'none';
+  try {
+    await current.animate(
+      [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-direction * 18}px)` }],
+      { duration: 110, easing: 'ease-in', fill: 'forwards' }
+    ).finished;
+  } catch { return; }                  // dibatalkan oleh panggilan berikutnya
+  if (token !== wizardToken || !wz.isConnected) return;
+
+  reveal();
+  const toHeight = body.offsetHeight;
+  if (fromHeight !== toHeight) {
+    body.animate([{ height: fromHeight + 'px' }, { height: toHeight + 'px' }], { duration: 280, easing: EASE });
+  }
+  staggerPanel(next, direction);
+  setTimeout(() => { if (token === wizardToken) body.style.overflow = ''; }, 320);
 }
 
 // --- Log ---

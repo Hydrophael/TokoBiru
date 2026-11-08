@@ -49,10 +49,12 @@ import {
   productRows,
   renderAuth,
   renderList,
+  renderOtp,
   renderShell,
-  resetModal,
   setCartQty,
+  setResetInfo,
   showOrderSuccess,
+  showResetStep,
   userModal,
   views
 } from './views.js';
@@ -372,11 +374,14 @@ function loginEmailHint() {
 }
 
 let resendTimer = null;
+let otpTimer = null;
 
-// Tombol kirim ulang aktif lagi setelah hitung mundur selesai (dihitung dari jam, bukan dari jumlah detak, agar tidak meleset di tab latar)
+// Tombol kirim ulang aktif lagi setelah hitung mundur selesai (dihitung dari jam, bukan dari jumlah detak, agar tidak meleset di tab latar).
+// Garis tipis di bawahnya ikut menyusut sebagai penanda sisa waktu.
 function startResendCountdown(button, seconds) {
   clearInterval(resendTimer);
   if (!button) return;
+  const box = button.closest('.resend');
   const endAt = Date.now() + seconds * 1000;
   const paint = () => {
     if (!button.isConnected) { clearInterval(resendTimer); return; }
@@ -385,30 +390,103 @@ function startResendCountdown(button, seconds) {
       clearInterval(resendTimer);
       button.disabled = false;
       button.textContent = 'Kirim ulang kode';
+      if (box) { box.classList.add('ready'); box.style.setProperty('--left', '0%'); }
       return;
     }
     button.disabled = true;
     button.textContent = `Kirim ulang dalam ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    if (box) { box.classList.remove('ready'); box.style.setProperty('--left', Math.min(100, left / seconds * 100) + '%'); }
   };
   paint();
   resendTimer = setInterval(paint, 1000);
 }
 
 async function resendResetCode(button) {
+  const flow = state.reset;
   const form = button.closest('form');
+  if (!flow || !form) return;
+
   button.disabled = true;
   button.textContent = 'Mengirim…';
   try {
-    const result = await api('/auth/forgot', { method: 'POST', body: { email: form.elements.email.value } });
+    const result = await api('/auth/forgot', { method: 'POST', body: { email: flow.sentTo || flow.email } });
+    const retryAfter = Number(result.retry_after) || 60;
+    flow.endAt = Date.now() + retryAfter * 1000;
+    flow.code = '';
     toast('Jika email terdaftar, kode baru sudah dikirim. Kode lama tidak berlaku lagi.', 'ok');
     clearErrors(form);
-    form.elements.code.value = '';
-    form.elements.code.focus();
-    startResendCountdown(button, Number(result.retry_after) || 120);
+    const input = form.elements.code;
+    input.value = '';
+    renderOtp(input.closest('[data-otp]'));
+    input.focus();
+    startResendCountdown(button, retryAfter);
   } catch (err) {
     toast(err.message, 'err');
     button.disabled = false;
     button.textContent = 'Kirim ulang kode';
+  }
+}
+
+// Kotak kode: gambar ulang saat isi berubah. Begitu lengkap, kotak "bergelombang" sebentar lalu langkah berikutnya terbuka sendiri.
+function onOtpInput(wrap) {
+  renderOtp(wrap);
+  const input = $('.otp-input', wrap);
+  if (input.value.length !== 6) return;
+
+  wrap.classList.add('wave');
+  setTimeout(() => wrap.classList.remove('wave'), 900);
+
+  const form = wrap.closest('form');
+  clearTimeout(otpTimer);
+  otpTimer = setTimeout(() => {
+    const panel = form.closest('.wz-panel');
+    if (!form.isConnected || (panel && panel.hidden) || input.value.length !== 6) return;
+    if (form.requestSubmit) form.requestSubmit();
+    else $('button[type=submit]', form)?.click();
+  }, reducedMotion.matches ? 120 : 480);
+}
+
+function onOtpFocus(e) {
+  const wrap = e.target.closest?.('[data-otp]');
+  if (wrap) renderOtp(wrap);
+}
+
+// Kursor selalu di ujung: mengetuk kotak tidak boleh menyisipkan digit di tengah
+function onOtpPointer(e) {
+  const wrap = e.target.closest?.('[data-otp]');
+  const input = wrap && $('.otp-input', wrap);
+  if (!input) return;
+  requestAnimationFrame(() => {
+    try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* abaikan */ }
+  });
+}
+
+function wizardBack() {
+  const panel = $('#modal-root .wz-panel:not([hidden])');
+  const step = panel ? Number(panel.dataset.panel) : 1;
+  if (step > 1 && step < 4) showResetStep(step - 1);
+}
+
+function finishReset() {
+  closeModal();
+  const field = $('#f-pw') || $('#f-id');
+  if (field) field.focus();
+}
+
+// Kode ditolak server: kembali ke langkah kode dengan kotak kosong dan pesan di bawahnya. Isian password tidak hilang.
+async function backToCodeStep(err) {
+  const form = $('#modal-root form[data-form="code"]');
+  if (!form) return;
+  state.reset.code = '';
+  const input = form.elements.code;
+  input.value = '';
+  renderOtp(input.closest('[data-otp]'));
+  clearErrors(form);
+  await showResetStep(2);
+  if (form.isConnected) {
+    showErrors(form, createError(err.message, {
+      fields: { code: 'Kode salah atau sudah kedaluwarsa. Periksa lagi, atau kirim ulang kode.' }
+    }));
   }
 }
 
@@ -431,7 +509,8 @@ const actions = {
   reload,
   logout,
   'close-modal':   closeModal,
-  overlay:         (el, e) => { if (e.target === el) closeModal(); },
+  // modal bertanda data-keep (isian panjang, mis. pemulihan password) tidak tertutup oleh ketukan di luar
+  overlay:         (el, e) => { if (e.target === el && !el.querySelector('[data-keep]')) closeModal(); },
   'ask-ok':        confirmAccepted,
   cat:             filterByCategory,
   detail:          openProductDetail,
@@ -453,8 +532,9 @@ const actions = {
   'user-new':      userModal,
   'change-password': passwordModal,
   'forgot-open':   () => forgotModal(loginEmailHint()),
-  'forgot-change': el => forgotModal(el.dataset.email),
   'forgot-resend': resendResetCode,
+  'wiz-back':      wizardBack,
+  'wiz-finish':    finishReset,
   'user-del':      deleteUser,
   'toggle-pw':     togglePasswordVisibility,
   'refresh-page':  () => location.reload()
@@ -463,33 +543,62 @@ const actions = {
 // === Form ===
 
 function clearErrors(form) {
-  $$('.invalid', form).forEach(input => input.classList.remove('invalid'));
+  $$('.invalid', form).forEach(input => { input.classList.remove('invalid'); input.removeAttribute('aria-invalid'); });
   $$('.field-err', form).forEach(msg => msg.remove());
   const alert = $('.form-alert', form);
   if (alert) alert.classList.remove('show');
 }
 
 function showErrors(form, err) {
-  const alert = $('.form-alert', form);
-  if (alert) {
-    alert.textContent = err.message;
-    alert.classList.add('show');
-  }
-
+  const invalid = [];
   Object.entries(err.fields || {}).forEach(([name, message]) => {
     const input = form.querySelector(`[name="${CSS.escape(name)}"]`);
     if (!input) return;
+    input.classList.remove('invalid');
+    void input.offsetWidth;   // paksa reflow agar animasi getar mulai ulang di kegagalan berikutnya
     input.classList.add('invalid');
+    input.setAttribute('aria-invalid', 'true');
 
     const hint = document.createElement('small');
     hint.className = 'field-err';
+    hint.setAttribute('role', 'alert');
     hint.textContent = message;
     (input.closest('.field') || input.parentNode).appendChild(hint);
+    invalid.push(input);
   });
+
+  // Pesan per kolom sudah cukup; banner hanya untuk error yang tidak terkait kolom tertentu
+  const alert = $('.form-alert', form);
+  if (alert) {
+    alert.textContent = invalid.length ? '' : err.message;
+    alert.classList.toggle('show', !invalid.length);
+    // tombol kirim ada di bawah, pesan di atas: bawa pesan ke layar supaya tidak terlewat
+    if (!invalid.length) alert.scrollIntoView({ block: 'nearest' });
+  }
+
+  // Fokus ke kolom salah pertama supaya pengguna keyboard dan pembaca layar tidak kehilangan posisi
+  const first = invalid.find(input => input.type !== 'hidden');
+  if (first) first.focus();
+}
+
+// Error sebuah kolom hilang begitu pengguna memperbaikinya; banner ikut hilang bila tak ada kolom salah lagi
+function clearFieldError(input) {
+  input.classList.remove('invalid');
+  input.removeAttribute('aria-invalid');
+  $('.field-err', input.closest('.field') || input.parentNode)?.remove();
+  const form = input.closest('form');
+  if (form && !$('.invalid', form)) $('.form-alert', form)?.classList.remove('show');
 }
 
 // bentuknya sama dengan error dari server
 const validationError = fields => createError('Periksa kembali isian Anda', { fields });
+
+// Aturan yang sama dengan server (min. 8 karakter, ada huruf dan angka), supaya salahnya ketahuan sebelum dikirim.
+// Server tetap memeriksa ulang dan tidak memakai kode reset bila password ditolak.
+const passwordProblem = password =>
+  password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password)
+    ? ''
+    : 'Password minimal 8 karakter dan mengandung huruf serta angka';
 
 // Satu kunci per isi keranjang. Bila respons hilang di jalan lalu pelanggan mengulang, server mengembalikan
 // pesanan yang sudah dibuat, bukan membuat pesanan kedua. Kunci kedaluwarsa agar keranjang yang sama
@@ -522,6 +631,10 @@ const formHandlers = {
   },
 
   async register(form, data) {
+    // email dipakai untuk kode lupa password; salah ketik berarti akun tidak bisa dipulihkan
+    if (String(data.email).trim().toLowerCase() !== String(data.email_confirm).trim().toLowerCase()) {
+      throw validationError({ email_confirm: 'Email tidak sama' });
+    }
     if (data.password !== data.confirm) {
       throw validationError({ confirm: 'Konfirmasi password tidak sama' });
     }
@@ -541,6 +654,8 @@ const formHandlers = {
   },
 
   async password(form, data) {
+    const weak = passwordProblem(data.new_password || '');
+    if (weak) throw validationError({ new_password: weak });
     if (data.new_password !== data.confirm) {
       throw validationError({ confirm: 'Konfirmasi password tidak sama' });
     }
@@ -555,28 +670,78 @@ const formHandlers = {
   async forgot(form, data) {
     const email = String(data.email || '').trim().toLowerCase();
     if (!/^\S+@\S+\.\S+$/.test(email)) throw validationError({ email: 'Format email tidak valid' });
-    const result = await api('/auth/forgot', { method: 'POST', body: { email } });
-    // ganti isi modal; jawaban server sama untuk email terdaftar maupun tidak
-    const retryAfter = Number(result.retry_after) || 120;
-    resetModal(email, { retryAfter, expiresMinutes: Number(result.expires_minutes) || 15 });
-    startResendCountdown($('[data-act="forgot-resend"]'), retryAfter);
+
+    const flow = state.reset;
+    // Email sama dan kode masih dalam masa jeda: pakai kode yang sudah dikirim, tidak perlu meminta lagi
+    const alreadySent = flow.sentTo === email && Date.now() < flow.endAt;
+    if (!alreadySent) {
+      // jawaban server sama untuk email terdaftar maupun tidak
+      const result = await api('/auth/forgot', { method: 'POST', body: { email } });
+      const retryAfter = Number(result.retry_after) || 60;
+      flow.sentTo = email;
+      flow.endAt = Date.now() + retryAfter * 1000;
+      flow.code = '';
+      const input = $('#modal-root input[name=code]');
+      if (input) { input.value = ''; renderOtp(input.closest('[data-otp]')); }
+      setResetInfo({ expires: Number(result.expires_minutes) || 15 });
+      startResendCountdown($('#modal-root [data-act="forgot-resend"]'), retryAfter);
+    }
+    flow.email = email;
+    setResetInfo({ email });
+    showResetStep(2);
+  },
+
+  // Kode diperiksa server dulu (tanpa dipakai) sebelum langkah password terbuka, jadi kode asal tidak bisa lolos.
+  // Server tetap memeriksa lagi dan memakai kode itu saat password baru dikirim.
+  async code(form, data) {
+    const code = String(data.code || '').replace(/\D/g, '');
+    if (!/^\d{6}$/.test(code)) throw validationError({ code: 'Kode terdiri dari 6 angka' });
+
+    const flow = state.reset;
+    try {
+      await api('/auth/reset/check', { method: 'POST', body: { email: flow.sentTo || flow.email, code } });
+    } catch (err) {
+      if (err.fields && err.fields.code) {   // kode salah atau kedaluwarsa: kosongkan kotak supaya bisa diketik ulang
+        const input = form.elements.code;
+        input.value = '';
+        renderOtp(input.closest('[data-otp]'));
+        throw createError(err.message, {
+          fields: { code: 'Kode salah atau sudah kedaluwarsa. Periksa lagi, atau kirim ulang kode.' }
+        });
+      }
+      throw err;   // mis. terkunci sementara (429) atau jaringan putus: tampil sebagai banner di langkah ini
+    }
+    flow.code = code;
+    showResetStep(3);
   },
 
   async reset(form, data) {
-    const code = String(data.code || '').trim();
-    if (!/^\d{6}$/.test(code)) throw validationError({ code: 'Kode terdiri dari 6 angka' });
+    const weak = passwordProblem(data.new_password || '');
+    if (weak) throw validationError({ new_password: weak });
     if (data.new_password !== data.confirm) {
       throw validationError({ confirm: 'Konfirmasi password tidak sama' });
     }
-    await api('/auth/reset', { method: 'POST', body: { email: data.email, code, new_password: data.new_password } });
-    closeModal();
-    toast('Password diganti. Silakan masuk dengan password baru.', 'ok');
+    const flow = state.reset;
+    const email = flow.sentTo || flow.email;
+    try {
+      await api('/auth/reset', { method: 'POST', body: { email, code: flow.code, new_password: data.new_password } });
+    } catch (err) {
+      if (err.fields && err.fields.code) {   // kode salah atau kedaluwarsa
+        await backToCodeStep(err);
+        return;
+      }
+      throw err;
+    }
+
+    flow.code = '';
+    form.elements.new_password.value = '';
+    form.elements.confirm.value = '';
+    updatePasswordChecks(form);
+
     // email sudah terisi di form masuk; tinggal ketik password baru
     const identifier = $('#f-id');
-    if (identifier) {
-      identifier.value = data.email;
-      ($('#f-pw') || identifier).focus();
-    }
+    if (identifier) identifier.value = email;
+    showResetStep(4);
   },
 
   async 'user-create'(form, data) {
@@ -680,15 +845,23 @@ async function onChange(e) {
 
 let searchDebounce;
 function onInput(e) {
+  if (e.target.classList?.contains('invalid')) clearFieldError(e.target);
+
   // kode reset hanya angka (tempel "123 456" pun jadi 123456)
   const digits = e.target.closest('[data-digits]');
   if (digits) {
     const clean = digits.value.replace(/\D/g, '').slice(0, 6);
     if (clean !== digits.value) digits.value = clean;
+    const otp = digits.closest('[data-otp]');
+    if (otp) onOtpInput(otp);
   }
 
   const pwForm = e.target.closest('form[data-pwcheck]');
-  if (pwForm) updatePasswordChecks(pwForm);
+  if (pwForm) {
+    updatePasswordChecks(pwForm);
+    const { new_password, confirm } = pwForm.elements;
+    if (confirm.classList.contains('invalid') && confirm.value === new_password.value) clearFieldError(confirm);
+  }
 
   const el = e.target.closest('[data-input]');
   if (!el) return;
@@ -780,6 +953,9 @@ function bindEvents() {
   document.addEventListener('click', onClick);
   document.addEventListener('change', onChange);
   document.addEventListener('input', onInput);
+  document.addEventListener('focusin', onOtpFocus);
+  document.addEventListener('focusout', onOtpFocus);
+  document.addEventListener('pointerup', onOtpPointer);
   document.addEventListener('keydown', onModalKeydown);
   document.addEventListener('keydown', onSearchShortcut);
   document.addEventListener('submit', onSubmit);
