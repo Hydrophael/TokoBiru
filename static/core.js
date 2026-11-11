@@ -28,13 +28,15 @@ export const NAV = [
 export const STORAGE_KEYS = {
   profile: userId => 'tb_profile_' + userId,   // per pengguna: perangkat bersama tidak membocorkan HP/alamat
   legacyProfile: 'tb_profile',                 // kunci lama tanpa ID pengguna, dibuang saat aplikasi dimuat
-  cart: userId => 'tb_cart_' + userId
+  cart: userId => 'tb_cart_' + userId,
+  layout: 'tb_shop_layout'                     // pilihan tampilan katalog (kartu / daftar), per perangkat
 };
 
 export const MAX_CART_QTY = 99;
 const LOW_STOCK_LIMIT = 5;
 const STOCK_BAR_FULL = 40;   // stok yang dianggap "penuh" pada bar stok
 export const MAX_TOASTS = 2;
+export const SHOP_PAGE_SIZE = 12;   // kartu produk yang ditambahkan tiap tahap (katalog besar dimuat bertahap)
 
 // emoji dipilih dari kata kunci di nama/kategori
 const EMOJI_RULES = [
@@ -45,11 +47,22 @@ const EMOJI_RULES = [
   [/\bmie\b|mi instan|pasta/i, '🍜'], [/\bair\b|mineral/i, '💧'],
   [/buah|apel|jeruk|pisang/i, '🍎'], [/sayur|bayam|wortel|tomat|cabai/i, '🥬'],
   [/daging|ayam|sapi|ikan/i, '🍗'], [/snack|keripik|camilan/i, '🍿'],
-  [/jus|soda|sirup|minuman/i, '🧃'], [/obat|vitamin/i, '💊'], [/bayi|popok/i, '🍼']
+  [/jus|soda|sirup|minuman/i, '🧃'], [/obat|vitamin/i, '💊'], [/bayi|popok/i, '🍼'],
+  // elektronik (dicek paling akhir supaya kata umum tidak menimpa aturan di atas)
+  [/laptop|notebook|lenovo|asus|acer|macbook|komputer|\bpc\b/i, '💻'],
+  [/\bhp\b|ponsel|smartphone|iphone|samsung|xiaomi|oppo|vivo|realme/i, '📱'],
+  [/headset|headphone|earphone|speaker|audio/i, '🎧'], [/\btv\b|televisi|monitor/i, '📺'],
+  [/kamera|camera/i, '📷'], [/jam tangan|smartwatch/i, '⌚'], [/kipas|\bac\b/i, '🌀'],
+  [/kabel|charger|baterai|powerbank|elektronik/i, '🔌']
 ];
 const DEFAULT_EMOJI = '🛒';
 
 const ICONS = {
+  sliders: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
+  grid:    '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>',
+  up:      '<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>',
+  left:    '<polyline points="15 18 9 12 15 6"/>',
+  right:   '<polyline points="9 18 15 12 9 6"/>',
   cart:    '<circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>',
   out:     '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
   plus:    '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
@@ -90,7 +103,10 @@ export const state = {
   category: '',
   query: '',
   searchIds: null,       // id produk hasil pencarian server, urut menurut relevansi (null = pakai filter lokal)
-  sort: 'name',
+  sort: 'auto',          // auto = Nama A-Z, atau paling relevan bila ada kata pencarian
+  filters: { inStock: false, min: null, max: null },   // filter stok dan rentang harga
+  layout: 'grid',        // 'grid' (kartu) atau 'rows' (daftar ringkas)
+  shopLimit: SHOP_PAGE_SIZE,   // jumlah kartu yang sedang tampil
   cart: {},              // id produk -> jumlah
 
   // data per halaman
@@ -161,6 +177,30 @@ export function productEmoji(product) {
   return match ? match[1] : DEFAULT_EMOJI;
 }
 
+// Deskripsi panjang yang ditulis sebagai "Judul - Kunci: nilai - Kunci: nilai" (atau dipisah baris)
+// ditampilkan sebagai daftar spesifikasi supaya mudah dibaca. Teks pendek tetap berupa paragraf biasa.
+const SPEC_SPLIT = /\n+|\s+[-–•]\s+/;
+const SPEC_PAIR = /^([^:]{2,28}):\s*(.+)$/;
+
+export function descriptionHtml(text) {
+  const raw = String(text ?? '').trim();
+  if (!raw) return '<p class="sub">Belum ada deskripsi untuk produk ini.</p>';
+
+  const parts = raw.split(SPEC_SPLIT).map(part => part.trim()).filter(Boolean);
+  if (parts.length < 3) return `<p class="sub">${escapeHtml(raw)}</p>`;
+
+  // bagian pertama tanpa "kunci:" dianggap kalimat pembuka
+  const intro = SPEC_PAIR.test(parts[0]) ? '' : parts.shift();
+  const rows = parts.map(part => {
+    const pair = part.match(SPEC_PAIR);
+    return pair
+      ? `<li><span class="k">${escapeHtml(pair[1])}</span><span class="v">${escapeHtml(pair[2])}</span></li>`
+      : `<li class="plain"><span class="v">${escapeHtml(part)}</span></li>`;
+  }).join('');
+
+  return `${intro ? `<p class="sub dintro">${escapeHtml(intro)}</p>` : ''}<ul class="specs" aria-label="Spesifikasi">${rows}</ul>`;
+}
+
 export const icon = (name, size = 17) =>
   `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
@@ -176,6 +216,14 @@ export function stockInfo(product) {
   const percent = Math.min(100, Math.round(stock / STOCK_BAR_FULL * 100));
   const label = stock === 0 ? 'Habis' : stock <= LOW_STOCK_LIMIT ? `Tinggal ${stock}` : `Stok ${stock}`;
   return `<div class="stock ${cls}"><span class="num">${label}</span><i><b style="width:${percent}%"></b></i></div>`;
+}
+
+// Versi ringkas untuk kartu: angka stok biasa saja, hanya yang menipis atau habis diberi tanda
+export function stockNote(product) {
+  const { stock } = product;
+  if (stock === 0) return '<span class="stock-note out">Habis</span>';
+  if (stock <= LOW_STOCK_LIMIT) return `<span class="stock-note low">Tinggal ${stock}</span>`;
+  return `<span class="stock-note">Stok ${stock}</span>`;
 }
 
 export const payRow = (label, value, copyText, copyLabel = label) =>

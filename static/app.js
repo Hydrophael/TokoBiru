@@ -10,6 +10,7 @@ import {
   cartQty,
   createError,
   defaultView,
+  descriptionHtml,
   escapeHtml,
   formatRupiah,
   hashString,
@@ -36,11 +37,12 @@ import {
   withTransition
 } from './ui.js';
 import {
-  aisleHtml,
+  afterShopRender,
+  appendCards,
   cartLines,
   cartTotal,
-  categoryRailHtml,
   drawCart,
+  filterModal,
   forgotModal,
   orderCards,
   orderRailHtml,
@@ -51,7 +53,9 @@ import {
   renderList,
   renderOtp,
   renderShell,
+  scrollRail,
   setCartQty,
+  updateRailEdges,
   setResetInfo,
   showOrderSuccess,
   showResetStep,
@@ -125,6 +129,7 @@ async function reload() {
     content.classList.toggle('fresh', state.fresh);   // animasi masuk hanya saat halaman baru dibuka
     content.innerHTML = views[state.view]();
     if (state.view === 'dashboard') animateDashboard(content);
+    if (state.view === 'shop') afterShopRender();
     if (isCustomer()) drawCart();
     if (state.fresh) setTimeout(() => $$('#content .stagger').forEach(el => el.classList.remove('stagger')), 1200);
   } catch (err) {
@@ -190,16 +195,24 @@ async function logout() {
   state.query = '';
   state.searchIds = null;
   state.category = '';
+  state.filters = { inStock: false, min: null, max: null };
   renderAuth('login');
   toast('Anda sudah keluar');
+}
+
+// Daftar sudah digulir jauh ke bawah lalu filter berubah: kembali ke kepala daftar supaya hasil baru terlihat
+function keepResultsInView() {
+  const head = $('.results-head');
+  if (!head) return;
+  const top = head.getBoundingClientRect().top + scrollY - ($('#tools')?.offsetHeight || 0) - 80;
+  if (scrollY > top) window.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
 }
 
 function filterByCategory(el) {
   state.category = el.dataset.cat;
   withTransition(() => {
-    $('#rail').innerHTML = categoryRailHtml();
     renderList();
-    $('#aisle').innerHTML = aisleHtml();
+    keepResultsInView();
 
     const active = $('#rail .active');
     if (active) {
@@ -207,6 +220,75 @@ function filterByCategory(el) {
       active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
     }
   });
+}
+
+function resetShopQuery() {
+  clearTimeout(searchDebounce);
+  searchSeq++;                 // hasil server yang datang terlambat diabaikan
+  state.query = '';
+  state.searchIds = null;
+  const input = $('[data-input=shop-search]');
+  if (input) input.value = '';
+}
+
+function clearSearch() {
+  resetShopQuery();
+  const input = $('[data-input=shop-search]');
+  if (input) input.focus();
+  withTransition(() => { renderList(); keepResultsInView(); });
+}
+
+function clearAllFilters() {
+  resetShopQuery();
+  state.category = '';
+  state.filters = { inStock: false, min: null, max: null };
+  withTransition(() => { renderList(); keepResultsInView(); });
+}
+
+function removeFilter(el) {
+  const kind = el.dataset.f;
+  if (kind === 'q') return clearSearch();
+  if (kind === 'price') { state.filters.min = null; state.filters.max = null; }
+  if (kind === 'stock') state.filters.inStock = false;
+  withTransition(() => { renderList(); keepResultsInView(); });
+}
+
+function applyFilters() {
+  const readPrice = selector => {
+    const digits = ($(selector).value || '').replace(/\D/g, '').slice(0, 12);
+    return digits ? Number(digits) : null;
+  };
+  let min = readPrice('#f-min');
+  let max = readPrice('#f-max');
+  if (min !== null && max !== null && min > max) [min, max] = [max, min];   // terbalik: tukar saja
+
+  state.filters = { inStock: $('#f-stock').checked, min, max };
+  closeModal();
+  withTransition(() => { renderList(); keepResultsInView(); });
+}
+
+function resetFilters() {
+  state.filters = { inStock: false, min: null, max: null };
+  closeModal();
+  withTransition(() => { renderList(); keepResultsInView(); });
+}
+
+function setLayout(el) {
+  state.layout = el.dataset.layout === 'rows' ? 'rows' : 'grid';
+  storage.set(STORAGE_KEYS.layout, state.layout);
+  $$('[data-act=layout]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.layout === state.layout)));
+  const shelf = $('#plist .shelf');
+  if (shelf) shelf.classList.toggle('rows', state.layout === 'rows');
+}
+
+function loadMoreProducts() {
+  const hadFocus = document.activeElement?.matches?.('[data-act=more]');
+  const before = $$('#plist [data-card]').length;
+  appendCards();
+
+  // tombol diganti saat tahap berikutnya masuk: fokus keyboard pindah ke kartu pertama yang baru
+  const firstNew = $$('#plist [data-card]')[before];
+  if (hadFocus && firstNew) $('.plink', firstNew).focus({ preventScroll: true });
 }
 
 function filterOrders(el) {
@@ -225,7 +307,8 @@ function openProductDetail(el) {
   const inCart = cartQty(product.id);
 
   openModal(`<div class="dtile p${hashString(product.id) % 4}"><span class="tag">${escapeHtml(product.category)}</span><span class="ini" aria-hidden="true">${productEmoji(product)}</span></div>
-      <h3>${escapeHtml(product.name)}</h3><p class="sub">${escapeHtml(product.description) || 'Belum ada deskripsi untuk produk ini.'}</p>
+      <h3>${escapeHtml(product.name)}</h3>
+      <div class="ddesc">${descriptionHtml(product.description)}</div>
       <div class="dmeta">${priceHtml(product.price)}${stockInfo(product)}</div>
       ${inCart ? `<p class="muted small" style="margin-bottom:10px">Sudah ${inCart} di keranjang Anda.</p>` : ''}
       <div class="foot"><button class="btn" data-act="close-modal">Tutup</button>
@@ -515,6 +598,17 @@ const actions = {
   overlay:         (el, e) => { if (e.target === el && !el.querySelector('[data-keep]')) closeModal(); },
   'ask-ok':        confirmAccepted,
   cat:             filterByCategory,
+  'open-filter':   filterModal,
+  'apply-filter':  applyFilters,
+  'reset-filters': resetFilters,
+  'rm-filter':     removeFilter,
+  'clear-all':     clearAllFilters,
+  'clear-search':  clearSearch,
+  layout:          setLayout,
+  more:            loadMoreProducts,
+  'to-top':        () => window.scrollTo({ top: 0, behavior: 'smooth' }),
+  'rail-prev':     () => scrollRail(-1),
+  'rail-next':     () => scrollRail(1),
   detail:          openProductDetail,
   'detail-add':    addFromProductDetail,
   'add-cart':      addOneToCart,
@@ -827,6 +921,7 @@ async function onChange(e) {
   if (e.target.matches('[data-sort]')) {
     state.sort = e.target.value;
     renderList();
+    keepResultsInView();
     return;
   }
 
@@ -890,11 +985,16 @@ function onInput(e) {
   if (!el) return;
 
   state.query = el.value;
+  if (el.dataset.input === 'shop-search') {
+    const clearButton = $('.search .clear');
+    if (clearButton) clearButton.hidden = !el.value;
+  }
   clearTimeout(searchDebounce);
   searchDebounce = setTimeout(() => {
     if (el.dataset.input === 'shop-search') {
       state.searchIds = null;      // kata berubah: tampilkan filter lokal dulu, hasil server menyusul
       renderList();
+      keepResultsInView();
       searchOnServer(state.query);
     } else {
       $('#prows').innerHTML = productRows();
@@ -907,8 +1007,16 @@ function onModalKeydown(e) {
   const modalOpen = $('#modal-root').firstChild;
 
   if (e.key === 'Escape') {
+    const active = document.activeElement;
     if (modalOpen) closeModal();
+    else if (active?.matches?.('[data-input=shop-search]') && active.value) clearSearch();
     else closeCart();
+    return;
+  }
+
+  if (e.key === 'Enter' && e.target.matches?.('#f-min, #f-max')) {
+    e.preventDefault();
+    applyFilters();
     return;
   }
 
@@ -977,6 +1085,36 @@ function initDrawerSwipe() {
   document.addEventListener('pointercancel', endSwipe);
 }
 
+// Halaman Belanja: di HP bilah cari dan kategori menyingkir saat menggulir ke bawah dan muncul lagi saat
+// menggulir ke atas; tombol "ke atas" muncul setelah daftar panjang digulir; panah rel kategori mengikuti posisi geser
+function initShopScroll() {
+  let lastY = scrollY;
+  let frame = 0;
+
+  const update = () => {
+    frame = 0;
+    const y = scrollY;
+    const toTop = $('.to-top');
+    if (toTop) toTop.hidden = y < 900;
+
+    const tools = $('#tools');
+    if (!tools) return;
+    if (!matchMedia('(max-width:780px)').matches || y < 160 || tools.contains(document.activeElement)) {
+      tools.classList.remove('away');
+      lastY = y;
+    } else if (y - lastY > 8) {
+      tools.classList.add('away');
+      lastY = y;
+    } else if (lastY - y > 8) {
+      tools.classList.remove('away');
+      lastY = y;
+    }
+  };
+
+  addEventListener('scroll', () => { if (!frame) frame = requestAnimationFrame(update); }, { passive: true });
+  document.addEventListener('scroll', e => { if (e.target.id === 'rail') updateRailEdges(); }, true);
+}
+
 function bindEvents() {
   document.addEventListener('click', onClick);
   document.addEventListener('change', onChange);
@@ -988,6 +1126,7 @@ function bindEvents() {
   document.addEventListener('keydown', onSearchShortcut);
   document.addEventListener('submit', onSubmit);
   initDrawerSwipe();
+  initShopScroll();
 
   addEventListener('offline', () => toast('Koneksi terputus. Pesanan baru bisa dibuat setelah tersambung.', 'err'));
   addEventListener('online', () => toast('Tersambung kembali', 'ok'));
@@ -997,6 +1136,7 @@ function bindEvents() {
 
 async function boot() {
   storage.remove(STORAGE_KEYS.legacyProfile);   // buang profil lama yang bisa memuat data pengguna sebelumnya
+  state.layout = storage.get(STORAGE_KEYS.layout) === 'rows' ? 'rows' : 'grid';
   bindEvents();
 
   try {

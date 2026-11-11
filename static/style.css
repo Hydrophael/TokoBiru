@@ -498,14 +498,11 @@ html.lock{overflow:hidden}
 .stamp.just{display:inline-block;animation:stampin .5s var(--ease) backwards}
 @keyframes stampin{0%{transform:scale(2.6) rotate(-16deg);opacity:0}60%{transform:scale(.9) rotate(-2deg);opacity:1}}
 
-/* Papan lorong: kategori terpilih tampil seperti papan penunjuk yang menggantung di atas rak */
-.aisle{display:flex;justify-content:center;padding-top:16px;margin:-6px 0 18px}
-.aisle-sign{position:relative;display:inline-flex;align-items:baseline;gap:12px;max-width:100%;padding:10px 24px 11px;border-radius:12px;background:var(--accent);color:var(--on-accent);box-shadow:0 3px 0 #d9a400,var(--shadow);transform-origin:50% -16px;animation:swing 1s var(--ease)}
-.aisle-sign::before,.aisle-sign::after{content:'';position:absolute;top:-16px;width:2px;height:16px;background:var(--track-edge)}
-.aisle-sign::before{left:24%} .aisle-sign::after{right:24%}
-.aisle-sign .a-no{font-size:.92rem;font-weight:700;white-space:nowrap}
-.aisle-sign b{font-family:var(--display);font-size:1.45rem;font-weight:800;letter-spacing:-.02em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@keyframes swing{0%{transform:rotate(-7deg)}30%{transform:rotate(5deg)}55%{transform:rotate(-3deg)}78%{transform:rotate(1.5deg)}100%{transform:none}}
+/* Papan lorong: kategori terpilih sebagai papan kuning kecil di kepala daftar produk */
+.aisle{display:flex;min-width:0;max-width:100%}
+.aisle-sign{display:inline-flex;align-items:baseline;gap:8px;max-width:100%;padding:6px 14px 8px;border-radius:10px;background:var(--accent);color:var(--on-accent);box-shadow:0 2px 0 #d9a400}
+.aisle-sign .a-no{font-size:.84rem;font-weight:700;white-space:nowrap}
+.aisle-sign b{font-family:var(--display);font-size:1.15rem;font-weight:800;letter-spacing:-.02em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* ---------- Detail produk, sukses pesanan, keranjang lembar-bawah ---------- */
 .plink{all:unset;cursor:pointer;border-radius:6px}
@@ -670,4 +667,139 @@ html.lock{overflow:hidden}
 @media(max-width:600px){
   .otp-cells{gap:6px}
   .otp-cell{height:54px;font-size:1.5rem}
+}
+
+/* ======================= Kartu produk: tinggi konsisten untuk produk apa pun =======================
+   Semua kartu dalam satu baris punya susunan yang sama, jadi nama atau deskripsi yang panjang tidak bisa
+   menarik kartu lain: nama dan deskripsi dipotong maksimal 2 baris (teks lengkap dibaca di jendela detail),
+   deskripsi memakai sisa ruang supaya stok, harga, dan tombol selalu sejajar, dan footer selalu dua baris
+   (harga di atas, tombol di bawah) sehingga harga sebesar apa pun tidak membuat tombol pindah-pindah. */
+.shelf{align-items:stretch}
+.lbody h3{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
+.lbody .ldesc{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere;
+  line-height:1.5;min-height:3em;flex:1 1 auto;cursor:pointer}
+.lbody .ldesc:empty{cursor:default}
+.lbody .ldesc:hover{color:var(--ink)}
+@media(min-width:601px){
+  .lfoot{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
+  .lfoot .price{justify-self:start;white-space:nowrap}
+  .lfoot .btn,.lfoot .qty.sm{width:100%}
+  .qty.sm{display:flex}
+  .qty.sm button{flex:0 0 44px;width:auto}
+  .qty.sm span{flex:1;text-align:center}
+}
+/* HP: kartu ringkas dua kolom, deskripsi cukup dibaca di jendela detail */
+@media(max-width:600px){
+  .lbody .ldesc{display:none}
+}
+
+/* Jendela detail: deskripsi panjang tampil sebagai daftar spesifikasi yang mudah dipindai */
+.ddesc{margin-bottom:14px}
+.ddesc>.sub{margin-bottom:12px;overflow-wrap:anywhere}
+.ddesc .dintro{font-weight:600;color:var(--ink)}
+.specs{list-style:none;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden}
+.specs li{display:grid;grid-template-columns:minmax(88px,34%) 1fr;gap:12px;padding:10px 14px;font-size:.95rem;line-height:1.45;border-bottom:1px solid var(--line)}
+.specs li:nth-child(even){background:var(--bg)}
+.specs li:last-child{border-bottom:0}
+.specs .k{font-weight:700;color:var(--ink2)}
+.specs .v{overflow-wrap:anywhere}
+.specs li.plain{grid-template-columns:1fr}
+@media(max-width:420px){.specs li{grid-template-columns:1fr;gap:2px}}
+
+/* ======================= Belanja: katalog yang tumbuh besar ======================= */
+
+/* bilah cari + tombol filter */
+.tools{transition:translate .25s var(--ease)}
+.tools-row{display:flex;gap:10px;align-items:stretch}
+.tools .search{flex:1 1 auto;width:auto;min-width:0;max-width:460px}
+.search .clear{flex:none;display:grid;place-items:center;width:34px;height:34px;margin-right:-8px;border:0;border-radius:50%;background:transparent;color:var(--ink2);cursor:pointer}
+.search .clear:hover{background:var(--blue-soft);color:var(--blue-text)}
+.search .clear[hidden]{display:none}
+.filter-btn{flex:none}
+.filter-btn.on{background:var(--blue-soft);border-color:var(--blue);color:var(--blue-text)}
+.filter-btn .fcount{display:grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:11px;background:var(--blue);color:var(--on-blue);font-size:.78rem}
+.filter-btn .fcount[hidden]{display:none}
+
+/* rel kategori: jumlah per kategori, tepi memudar bila masih ada yang tersembunyi, panah di desktop */
+.rail-wrap{position:relative}
+.rail button .n{display:inline-block;min-width:22px;margin-left:8px;padding:0 6px;border-radius:999px;background:var(--bg-soft);color:var(--ink2);font-size:.8rem;font-weight:700;line-height:21px;text-align:center}
+.rail button.active .n{background:rgba(255,255,255,.22);color:var(--on-blue)}
+.rail button.zero:not(.active){color:var(--muted);border-color:var(--line-strong)}
+.rail-wrap.can-prev .rail{-webkit-mask-image:linear-gradient(90deg,transparent,#000 34px);mask-image:linear-gradient(90deg,transparent,#000 34px)}
+.rail-wrap.can-next .rail{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 34px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 34px),transparent)}
+.rail-wrap.can-prev.can-next .rail{-webkit-mask-image:linear-gradient(90deg,transparent,#000 34px,#000 calc(100% - 34px),transparent);mask-image:linear-gradient(90deg,transparent,#000 34px,#000 calc(100% - 34px),transparent)}
+.rail-arrow{display:none}
+@media(hover:hover) and (min-width:781px){
+  .rail-arrow{position:absolute;top:2px;z-index:2;place-items:center;width:44px;height:44px;border:1.5px solid var(--field);border-radius:50%;background:var(--surface);color:var(--ink);cursor:pointer;box-shadow:var(--shadow)}
+  .rail-arrow:hover{border-color:var(--blue);color:var(--blue-text)}
+  .rail-arrow.prev{left:-6px} .rail-arrow.next{right:-6px}
+  .rail-wrap.can-prev .rail-arrow.prev,.rail-wrap.can-next .rail-arrow.next{display:grid}
+}
+
+/* kepala daftar: papan lorong + jumlah + urutan + pilihan tampilan */
+.results-head{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px;margin:8px 0 14px}
+.results-head .rcount{flex:1 1 auto;min-width:0}
+.rh-tools{display:flex;align-items:center;gap:10px;margin-left:auto}
+.seg{display:inline-flex;border:1.5px solid var(--field);border-radius:var(--r-sm);overflow:hidden;background:var(--surface)}
+.seg button{display:grid;place-items:center;width:44px;height:44px;border:0;background:transparent;color:var(--ink2);cursor:pointer;transition:background .15s,color .15s}
+.seg button+button{border-left:1.5px solid var(--field)}
+.seg button:hover{background:var(--blue-soft);color:var(--blue-text)}
+.seg button[aria-pressed=true]{background:var(--blue);color:var(--on-blue)}
+.seg button:focus-visible{outline-offset:-4px}
+
+/* chip filter aktif */
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
+.chips:empty{display:none}
+.chip{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:4px 12px 4px 14px;border:1.5px solid var(--blue-l);border-radius:999px;background:var(--blue-soft);color:var(--blue-text);font-weight:600;font-size:.92rem;cursor:pointer;transition:border-color .15s,background .15s}
+.chip:hover{border-color:var(--blue)}
+.chip.clear-all{border-color:transparent;background:transparent;text-decoration:underline;text-underline-offset:3px}
+
+/* kartu: stok tampil sebagai teks (bilah relatif terhadap angka 40 menyesatkan), hanya stok menipis yang diberi tanda */
+.lbody .ldesc{min-height:0}
+.stock-note{align-self:flex-start;margin-top:auto;display:inline-flex;align-items:center;font-size:.88rem;font-weight:600;color:var(--muted)}
+.stock-note.low{padding:1px 10px;border:1px solid var(--warn-line);border-radius:999px;background:var(--warn-bg);color:var(--warn)}
+.stock-note.out{color:var(--err)}
+.skeleton{height:372px}
+
+/* tampilan daftar: satu produk per baris, cepat dipindai saat katalog besar */
+.shelf.rows{grid-template-columns:1fr;gap:10px}
+.shelf.rows .label{flex-direction:row;align-items:stretch;border-radius:var(--r-sm)}
+.shelf.rows .label:hover{transform:none}
+.shelf.rows .tile{flex:none;width:96px;height:auto;min-height:0;padding:0;gap:0;justify-content:center;align-items:center}
+.shelf.rows .tile .cat{display:none}
+.shelf.rows .tile .ini{align-self:center;margin:0;font-size:2.6rem}
+.shelf.rows .lbody{min-width:0;padding:12px 16px;justify-content:center}
+.shelf.rows .lbody h3{font-size:1.05rem}
+.shelf.rows .lbody .ldesc{flex:none;-webkit-line-clamp:1;line-clamp:1}
+.shelf.rows .stock-note{margin-top:0}
+.shelf.rows .lfoot{display:flex;flex-direction:row;align-items:center;flex:none;gap:18px;padding:12px 16px}
+.shelf.rows .lfoot .btn{width:auto;min-width:132px}
+.shelf.rows .lfoot .qty.sm{width:132px}
+
+/* pemuatan bertahap + tombol ke atas */
+.more{display:grid;justify-items:center;gap:10px;margin:30px auto 6px;text-align:center}
+.more:empty{display:none}
+.more-bar{width:min(280px,70%);height:6px;border-radius:3px;background:var(--track);box-shadow:inset 0 0 0 1px var(--track-edge);overflow:hidden}
+.more-bar i{display:block;height:100%;border-radius:3px;background:var(--bar);transition:width .4s var(--ease)}
+.to-top{position:fixed;right:20px;bottom:24px;z-index:33;display:grid;place-items:center;width:48px;height:48px;border:0;border-radius:50%;background:var(--navy);color:#fff;cursor:pointer;box-shadow:var(--shadow-lg);transition:translate .15s var(--ease),background .15s}
+.to-top[hidden]{display:none}
+.to-top:hover{background:var(--blue);translate:0 -2px}
+
+@media(max-width:780px){
+  /* HP: bilah cari dan kategori menyingkir saat menggulir ke bawah, muncul lagi saat menggulir ke atas */
+  .tools.away{translate:0 calc(-100% - 76px);pointer-events:none}
+  .tools.away:focus-within{translate:none;pointer-events:auto}
+  .to-top{right:14px;bottom:calc(150px + env(safe-area-inset-bottom));width:44px;height:44px}
+}
+@media(max-width:600px){
+  .skeleton{height:236px}
+  .stock-note{font-size:.82rem}
+  .rh-tools{width:100%}
+  .sortsel{flex:1} .sortsel .select{width:100%}
+  .shelf.rows .tile{width:72px}
+  .shelf.rows .tile .ini{font-size:2rem}
+  .shelf.rows .lbody{padding:10px 8px 10px 12px}
+  .shelf.rows .lbody .ldesc{display:none}
+  .shelf.rows .lfoot{flex-direction:column;align-items:flex-end;justify-content:center;gap:8px;width:132px;padding:10px 12px 10px 4px}
+  .shelf.rows .lfoot .btn,.shelf.rows .lfoot .qty.sm{width:100%;min-width:0}
 }
