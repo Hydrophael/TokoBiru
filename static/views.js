@@ -274,7 +274,7 @@ const cartDrawerHtml = () => `<div class="scrim" id="scrim" data-act="close-cart
 const skeletonHtml = () => `<div class="shelf">${'<div class="skeleton"></div>'.repeat(6)}</div>`;
 
 // Penanda menu aktif meluncur ke tombol yang dipilih (posisi dibaca dari tombolnya)
-export function moveNavIndicator() {
+function moveNavIndicator() {
   const nav = $('.nav');
   const active = nav && $('button.active', nav);
   if (!active) return;

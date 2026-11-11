@@ -752,7 +752,7 @@ const formHandlers = {
   },
 
   async checkout(form, data) {
-    const phone = String(data.phone || '').replace(/[\s.\-]/g, '');
+    const phone = String(data.phone || '').replace(/[\s.-]/g, '');
     if (!/^\+?\d{8,15}$/.test(phone)) {
       throw validationError({ phone: 'Isi nomor HP yang benar, contoh 081234567890' });
     }
