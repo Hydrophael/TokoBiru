@@ -171,7 +171,8 @@ textarea.input{resize:vertical;min-height:88px}
 .receipts{--gap:22px;display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:var(--gap);align-items:start}
 .receipt{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:22px;box-shadow:var(--shadow);transition:box-shadow .25s}
 .receipt:hover{box-shadow:var(--shadow-lg)}
-.r-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.r-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;align-items:center}
+.r-top .r-code{grid-column:1/-1}   /* kode pesanan satu baris penuh; tanggal dan status di bawahnya */
 .r-code{font-family:var(--display);font-weight:800;font-size:1.25rem;letter-spacing:-.02em;display:block}
 .stamp{font-weight:700;font-size:.88rem;border:1px solid currentColor;border-radius:999px;padding:3px 12px;white-space:nowrap;color:var(--blue-text);background:var(--blue-soft)}
 .stamp.warn{color:var(--warn);background:var(--warn-bg)} .stamp.ok{color:var(--ok);background:var(--ok-bg)} .stamp.err{color:var(--err);background:var(--err-bg)}
@@ -390,16 +391,18 @@ html.lock{overflow:hidden}
 
 /* ---- Cara bayar dan Beli lagi ---- */
 .r-pay{background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:14px}
-.r-pay-head{display:block;font-size:.95rem;color:var(--warn);margin-bottom:6px}
-.pay-row{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"label btn" "value btn";column-gap:10px;row-gap:1px;align-items:center;padding:9px 0;border-top:1px dashed var(--warn-line)}
-.r-pay>.pay-row:first-child,.r-pay-head+.pay-row{border-top:0;padding-top:2px}
+.r-pay-head{display:flex;flex-direction:column;gap:1px;margin-bottom:4px}
+.r-pay-head b{font-size:.95rem;color:var(--warn)}
+.r-pay-head span{font-size:.82rem;color:var(--ink2)}
+.pay-row{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"label btn" "value btn";column-gap:10px;row-gap:0;align-items:center;padding:7px 0;border-top:1px dashed var(--warn-line)}
+.r-pay>.pay-row:first-child,.r-pay-head+.pay-row{border-top:0;padding-top:4px}
 .pay-row span{grid-area:label;color:var(--ink2);font-size:.8rem;font-weight:600}
 .pay-row b{grid-area:value;font-size:1rem;line-height:1.35;overflow-wrap:anywhere}
 .pay-row .btn{grid-area:btn}
 .pay-row.static{grid-template-columns:minmax(0,1fr);grid-template-areas:"label" "value"}
 .pay-row.static b{color:var(--warn)}
-.r-pay .btn.sm{background:#fff}
-.r-pay-hint{margin-top:8px;padding-top:10px;border-top:1px dashed var(--warn-line);font-size:.84rem;line-height:1.5;color:var(--ink2)}
+.r-pay .btn.sm{background:#fff;min-height:34px;padding:0 12px}
+.r-pay-hint{margin-top:4px;padding-top:8px;border-top:1px dashed var(--warn-line);font-size:.82rem;line-height:1.4;color:var(--ink2)}
 
 /* ---- Layar masuk ---- */
 .auth-card .input::placeholder{color:#5b7391}

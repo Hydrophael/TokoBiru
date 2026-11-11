@@ -37,15 +37,26 @@ import { PHOTO_HINT, photoPreviewHtml } from './photo.js';
 
 // === Modal pesanan berhasil ===
 
-const deadlineHtml = order =>
-  order.expires_at ? ` Bayar sebelum <b>${formatDate(order.expires_at)}</b>, jika tidak pesanan dibatalkan otomatis.` : '';
+// Kotak "Cara bayar": dipakai di dialog sukses checkout dan di kartu pesanan yang masih menunggu bayar.
+// Tiap baris: label kecil di atas, nilai di bawahnya, tombol Salin di kanan, jadi nilai panjang tidak berantakan.
+function paymentBoxHtml(order, title = '') {
+  const deadline = order.expires_at ? `Bayar sebelum <b>${formatDate(order.expires_at)}</b>` : '';
+  const head = title || deadline
+    ? `<div class="r-pay-head">${title ? `<b>${title}</b>` : ''}${deadline ? `<span>${deadline}</span>` : ''}</div>` : '';
+  return `<section class="r-pay"${title ? ` aria-label="${title}"` : ''}>
+    ${head}
+    ${payRow('Nominal', formatRupiah(order.total), order.total)}
+    ${payRow('Kode pesanan', order.code, order.code)}
+    ${state.payInfo ? payRow('Tujuan', state.payInfo, state.payInfo, 'Tujuan bayar') : ''}
+    <p class="r-pay-hint">Cantumkan kode pesanan saat transfer.</p>
+  </section>`;
+}
 
 export function showOrderSuccess(order) {
   if (!order) return;
   openModal(`<div class="done"><svg class="done-ic" viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="24"/><path d="M15 27l8 8 14-19"/></svg>
     <h3>Pesanan berhasil dibuat</h3><p class="sub">Satu langkah lagi: bayar agar pesanan segera diproses.</p></div>
-    <div class="r-pay">${payRow('Nominal', formatRupiah(order.total), order.total)}${payRow('Kode pesanan', order.code, order.code)}${state.payInfo ? payRow('Tujuan', state.payInfo, state.payInfo) : ''}
-    <p class="muted small">Cantumkan kode pesanan saat membayar.${deadlineHtml(order)}</p></div>
+    ${paymentBoxHtml(order)}
     <div class="foot"><button class="btn primary" data-act="close-modal">Mengerti</button></div>`);
 }
 
@@ -786,29 +797,33 @@ function customerOrderActions(order) {
 
 const orderActions = order => (isStaff() ? staffOrderActions(order) : customerOrderActions(order));
 
-const orderPaymentHtml = order =>
-  `<div class="r-pay"><b>Cara bayar</b>${payRow('Nominal', formatRupiah(order.total), order.total)}${payRow('Kode pesanan', order.code, order.code)}${state.payInfo ? payRow('Tujuan', state.payInfo, state.payInfo, 'Tujuan bayar') : ''}<p class="muted small">Cantumkan kode pesanan saat membayar. Pesanan diproses setelah admin mengonfirmasi pembayaran.${deadlineHtml(order)}</p></div>`;
+const orderPaymentHtml = order => paymentBoxHtml(order, 'Cara bayar');
 
 const orderLineHtml = item =>
   `<li><span>${escapeHtml(item.name)}</span><span class="num">${formatRupiah(item.subtotal)}</span><em class="num">${item.qty} × ${formatRupiah(item.price)}</em></li>`;
+
+const infoRow = (label, value) => (value ? `<div><dt>${label}</dt><dd>${value}</dd></div>` : '');
 
 function orderCardHtml(order, staff, index = 0) {
   const [statusLabel, statusColor] = STATUS[order.status];
   const justUpdated = order.id === state.justUpdatedOrderId ? ' just' : '';
   const owner = staff ? ', atas nama <b>' + escapeHtml(order.username) + '</b>' : '';
-  const note = (order.phone ? '<br>HP/WA: <b class="num">' + escapeHtml(order.phone) + '</b>' : '') +
-    (order.note ? '<br>Catatan: ' + escapeHtml(order.note) : '') +
-    (order.cancel_reason === 'expired' ? '<br><em>Dibatalkan otomatis karena melewati batas waktu bayar.</em>' : '');
+  const info = `<dl class="r-info">${infoRow('Kirim ke', escapeHtml(order.address))}${
+    infoRow('HP/WA', order.phone ? `<span class="num">${escapeHtml(order.phone)}</span>` : '')}${
+    infoRow('Catatan', escapeHtml(order.note))}</dl>`;
+  const autoCancel = order.cancel_reason === 'expired'
+    ? '<p class="r-auto">Dibatalkan otomatis karena melewati batas waktu bayar.</p>' : '';
   const payment = !staff && order.status === 'pending' ? orderPaymentHtml(order) : '';
 
   return `
-    <article class="receipt" style="--i:${Math.min(index, 8)}">
-      <div class="r-top"><div><span class="r-code num">${escapeHtml(order.code)}</span><span class="muted small">${formatDate(order.created_at)}${owner}</span></div>
+    <article class="receipt st-${order.status}" style="--i:${Math.min(index, 8)}">
+      <div class="r-top"><span class="r-code num">${escapeHtml(order.code)}</span>
+        <span class="muted small r-date">${formatDate(order.created_at)}${owner}</span>
         <span class="stamp ${statusColor}${justUpdated}">${statusLabel}</span></div>
       ${timelineHtml(order.status)}
       <ul class="r-lines">${order.items.map(orderLineHtml).join('')}</ul>
       <div class="r-total"><span>Total</span><strong class="num">${formatRupiah(order.total)}</strong></div>
-      <div class="r-addr">Kirim ke: ${escapeHtml(order.address)}${note}</div>
+      ${info}${autoCancel}
       ${payment}
       <div class="acts">${orderActions(order)}</div>
     </article>`;
