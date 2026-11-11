@@ -134,13 +134,19 @@ export function flyToCart(from) {
   const target = [$('#cartbar:not([hidden])'), $('.cart-btn')].find(el => el && el.getClientRects().length);
   if (!target) return;
 
+  const isPhoto = from instanceof HTMLImageElement;
   const fromBox = from.getBoundingClientRect();
+  const size = 56;   // foto terbang sebagai kotak kecil, bukan sebesar kartu
+  const startBox = isPhoto
+    ? { left: fromBox.left + fromBox.width / 2 - size / 2, top: fromBox.top + fromBox.height / 2 - size / 2, width: size, height: size }
+    : fromBox;
   const targetBox = target.getBoundingClientRect();
   const dot = document.createElement('div');
-  dot.className = 'fly';
-  dot.textContent = from.textContent;
+  dot.className = isPhoto ? 'fly photo' : 'fly';
+  if (isPhoto) dot.style.backgroundImage = `url("${from.currentSrc || from.src}")`;
+  else dot.textContent = from.textContent;
   dot.setAttribute('aria-hidden', 'true');
-  dot.style.cssText = `left:${fromBox.left}px;top:${fromBox.top}px;width:${fromBox.width}px;height:${fromBox.height}px`;
+  Object.assign(dot.style, { left: startBox.left + 'px', top: startBox.top + 'px', width: startBox.width + 'px', height: startBox.height + 'px' });
   document.body.appendChild(dot);
 
   const dx = targetBox.left + targetBox.width / 2 - (fromBox.left + fromBox.width / 2);

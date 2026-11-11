@@ -177,6 +177,28 @@ export function productEmoji(product) {
   return match ? match[1] : DEFAULT_EMOJI;
 }
 
+// Foto produk: server memberi alamat foto di field `photo` (/api/products/<id>/image?v=...). Hanya alamat dengan
+// bentuk itu yang dipakai; nilai lain dianggap tidak ada foto.
+const PHOTO_URL_PATTERN = /^\/api\/products\/[0-9a-f]{24}\/image\?v=\d+$/;
+export function productImage(product) {
+  const photo = product?.photo;
+  return typeof photo === 'string' && PHOTO_URL_PATTERN.test(photo) ? photo : '';
+}
+
+// Isi .tile dan .dtile: foto bila ada, emoji bila tidak
+export function tileVisualHtml(product) {
+  const image = productImage(product);
+  return image
+    ? `<img class="photo" src="${image}" alt="" loading="lazy" decoding="async">`
+    : `<span class="ini" aria-hidden="true">${productEmoji(product)}</span>`;
+}
+
+// Kotak kecil (keranjang, tabel): foto bila ada, emoji bila tidak
+export function miniHtml(product) {
+  const image = productImage(product);
+  return `<span class="mini${image ? ' has-photo' : ''}" aria-hidden="true">${image ? `<img src="${image}" alt="" loading="lazy" decoding="async">` : productEmoji(product)}</span>`;
+}
+
 // Deskripsi panjang yang ditulis sebagai "Judul - Kunci: nilai - Kunci: nilai" (atau dipisah baris)
 // ditampilkan sebagai daftar spesifikasi supaya mudah dibaca. Teks pendek tetap berupa paragraf biasa.
 const SPEC_SPLIT = /\n+|\s+[-–•]\s+/;

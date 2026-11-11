@@ -20,9 +20,11 @@ import {
   newRequestKey,
   priceHtml,
   productEmoji,
+  productImage,
   state,
   stockInfo,
-  storage
+  storage,
+  tileVisualHtml
 } from './core.js';
 import {
   animateDashboard,
@@ -36,6 +38,8 @@ import {
   toast,
   withTransition
 } from './ui.js';
+import { choosePhoto, clearPhoto, handlePhotoInput } from './photo.js';
+import './layout.js';   // tata letak kartu pesanan yang rapat (tanpa ruang kosong)
 import {
   afterShopRender,
   appendCards,
@@ -146,7 +150,7 @@ function addOneToCart(el) {
   const card = el.closest('[data-card]');
   const current = cartQty(id);
 
-  if (product && card && current < product.stock) flyToCart($('.ini', card));
+  if (product && card && current < product.stock) flyToCart($('.ini, .photo', card));
   setCartQty(id, current + 1);
 }
 
@@ -306,7 +310,7 @@ function openProductDetail(el) {
   if (!product) return;
   const inCart = cartQty(product.id);
 
-  openModal(`<div class="dtile p${hashString(product.id) % 4}"><span class="tag">${escapeHtml(product.category)}</span><span class="ini" aria-hidden="true">${productEmoji(product)}</span></div>
+  openModal(`<div class="dtile p${hashString(product.id) % 4}${productImage(product) ? ' has-photo' : ''}"><span class="tag">${escapeHtml(product.category)}</span>${tileVisualHtml(product)}</div>
       <h3>${escapeHtml(product.name)}</h3>
       <div class="ddesc">${descriptionHtml(product.description)}</div>
       <div class="dmeta">${priceHtml(product.price)}${stockInfo(product)}</div>
@@ -320,7 +324,7 @@ function addFromProductDetail(el) {
   const product = state.productMap[id];
   const current = cartQty(id);
 
-  if (product && current < product.stock) flyToCart($('.dtile .ini'));
+  if (product && current < product.stock) flyToCart($('.dtile .ini, .dtile .photo'));
   closeModal();
   setCartQty(id, current + 1);
 }
@@ -625,6 +629,8 @@ const actions = {
   'product-new':   () => productModal(null),
   'product-edit':  el => productModal(state.productMap[el.dataset.id]),
   'product-del':   deleteProduct,
+  'photo-pick':    el => choosePhoto(el.closest('form')),
+  'photo-clear':   el => clearPhoto(el.closest('form')),
   'user-new':      userModal,
   'change-password': passwordModal,
   'forgot-open':   () => forgotModal(loginEmailHint()),
@@ -918,6 +924,8 @@ function onClick(e) {
 }
 
 async function onChange(e) {
+  if (e.target.matches('[data-photo-input]')) { await handlePhotoInput(e.target); return; }
+
   if (e.target.matches('[data-sort]')) {
     state.sort = e.target.value;
     renderList();

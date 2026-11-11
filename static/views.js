@@ -23,7 +23,9 @@ import {
   isStaff,
   payRow,
   priceHtml,
-  productEmoji,
+  miniHtml,
+  productImage,
+  tileVisualHtml,
   state,
   statusTag,
   stockInfo,
@@ -31,6 +33,7 @@ import {
   storage
 } from './core.js';
 import { EASE, burst, linkLabels, openModal, reducedMotion, toast, tweenNumber } from './ui.js';
+import { PHOTO_HINT, photoPreviewHtml } from './photo.js';
 
 // === Modal pesanan berhasil ===
 
@@ -485,7 +488,7 @@ function productCardHtml(product, index) {
   const description = String(product.description ?? '').trim();
   return `
     <article class="label${product.stock === 0 ? ' soldout' : ''}" data-card="${product.id}" style="--i:${Math.min(index, 8)}">
-      <div class="tile p${hashString(product.id) % 4}" data-act="detail" data-id="${product.id}"><span class="cat tag">${escapeHtml(product.category)}</span><span class="ini" aria-hidden="true">${productEmoji(product)}</span></div>
+      <div class="tile p${hashString(product.id) % 4}${productImage(product) ? ' has-photo' : ''}" data-act="detail" data-id="${product.id}"><span class="cat tag">${escapeHtml(product.category)}</span>${tileVisualHtml(product)}</div>
       <div class="lbody"><h3><button type="button" class="plink" data-act="detail" data-id="${product.id}" title="${escapeHtml(product.name)}">${escapeHtml(product.name)}</button></h3>${description ? `<p class="ldesc" data-act="detail" data-id="${product.id}">${escapeHtml(description)}</p>` : ''}${stockNote(product)}</div>
       ${cardFoot(product)}
     </article>`;
@@ -510,7 +513,8 @@ function productCards(firstRender = false, list = filteredProducts()) {
       hasAnyFilter() ? '<button class="btn primary" data-act="clear-all">Hapus semua filter</button>' : '');
   }
   const layout = state.layout === 'rows' ? ' rows' : '';
-  return `<div class="shelf${firstRender ? ' stagger' : ''}${layout}">${list.slice(0, state.shopLimit).map(productCardHtml).join('')}</div>
+  const photos = list.some(product => productImage(product)) ? ' photos' : '';   // ada foto: semua kartu berukuran sama supaya baris rata
+  return `<div class="shelf${firstRender ? ' stagger' : ''}${layout}${photos}">${list.slice(0, state.shopLimit).map(productCardHtml).join('')}</div>
     <div class="more" id="more">${moreHtml(list.length)}</div>`;
 }
 
@@ -650,7 +654,7 @@ export const cartTotal = lines => lines.reduce((sum, line) => sum + line.product
 
 function cartItemHtml({ product, qty }) {
   return `
-    <div class="citem"><span class="mini" aria-hidden="true">${productEmoji(product)}</span>
+    <div class="citem">${miniHtml(product)}
       <div class="meta"><b>${escapeHtml(product.name)}</b><span class="muted small num">${formatRupiah(product.price)}</span><br>
         <div class="qty"><button data-act="cart-dec" data-id="${product.id}" aria-label="Kurangi jumlah">−</button><span class="num">${qty}</span><button data-act="cart-inc" data-id="${product.id}" aria-label="Tambah jumlah">+</button></div></div>
       <div class="right"><b class="num">${formatRupiah(product.price * qty)}</b><br><button class="btn sm danger" style="margin-top:8px" data-act="cart-del" data-id="${product.id}" aria-label="Hapus ${escapeHtml(product.name)}">${icon('trash', 13)}</button></div>
@@ -870,7 +874,7 @@ const recentOrdersHtml = stats => stats.recent.length
   : '<p class="muted">Belum ada pesanan masuk.</p>';
 
 const lowStockHtml = stats => stats.low_stock.length
-  ? stats.low_stock.map(product => `<div class="line"><span class="cell"><span class="mini" aria-hidden="true">${productEmoji(product)}</span><span><b>${escapeHtml(product.name)}</b><br><span class="muted small">${escapeHtml(product.category)}</span></span></span>${stockInfo(product)}</div>`).join('')
+  ? stats.low_stock.map(product => `<div class="line"><span class="cell">${miniHtml(product)}<span><b>${escapeHtml(product.name)}</b><br><span class="muted small">${escapeHtml(product.category)}</span></span></span>${stockInfo(product)}</div>`).join('')
   : '<p class="muted">Semua stok masih aman.</p>';
 
 function dashboardView() {
@@ -899,7 +903,7 @@ function dashboardView() {
 
 function productRowHtml(product, index = 0) {
   return `<tr style="--i:${Math.min(index, 10)}">
-    <td data-label="Produk"><div class="cell"><span class="mini" aria-hidden="true">${productEmoji(product)}</span><div><b>${escapeHtml(product.name)}</b><div class="muted small">${escapeHtml(String(product.description ?? '').slice(0, 60))}</div></div></div></td>
+    <td data-label="Produk"><div class="cell">${miniHtml(product)}<div><b>${escapeHtml(product.name)}</b><div class="muted small">${escapeHtml(String(product.description ?? '').slice(0, 60))}</div></div></div></td>
     <td data-label="Kategori"><span class="tag">${escapeHtml(product.category)}</span></td><td data-label="Harga"><b class="num">${formatRupiah(product.price)}</b></td><td data-label="Stok">${stockInfo(product)}</td>
     <td data-label="Aksi"><div class="acts end"><button class="btn sm" data-act="product-edit" data-id="${product.id}">${icon('edit', 13)} Ubah</button>
       <button class="btn sm danger" data-act="product-del" data-id="${product.id}" aria-label="Hapus ${escapeHtml(product.name)}">${icon('trash', 13)}</button></div></td></tr>`;
@@ -931,6 +935,7 @@ const productsView = () => `
 export function productModal(product) {
   const isEdit = Boolean(product);
   const values = product || { name: '', category: '', price: '', stock: '', description: '' };
+  const image = productImage(product);
   const categoryOptions = state.categories.map(c => `<option value="${escapeHtml(c)}">`).join('');
 
   openModal(`
@@ -938,6 +943,17 @@ export function productModal(product) {
     <form data-form="product" data-id="${isEdit ? product.id : ''}" novalidate>
       <div class="form-alert" role="alert"></div>
       ${isEdit ? `<input type="hidden" name="base_stock" value="${escapeHtml(product.stock)}">` : ''}
+      <div class="field photo-field"><label>Foto produk (opsional)</label>
+        <div class="photo-row">
+          <div class="photo-preview" data-photo-preview>${photoPreviewHtml(image)}</div>
+          <div class="photo-side">
+            <input type="file" class="sr-only" accept="image/*" data-photo-input>
+            <input type="hidden" name="image" value="" disabled>
+            <div class="acts"><button type="button" class="btn sm" data-act="photo-pick">${icon('plus', 14)} Pilih foto</button>
+              <button type="button" class="btn sm danger" data-act="photo-clear"${image ? '' : ' hidden'}>${icon('trash', 13)} Hapus foto</button></div>
+            <p class="muted small" data-photo-note>${PHOTO_HINT}</p>
+          </div>
+        </div></div>
       <div class="field"><label>Nama produk</label><input class="input" name="name" required maxlength="80" placeholder="Contoh: Beras Premium 5 kg" value="${escapeHtml(values.name)}"></div>
       <div class="row2">
         <div class="field"><label>Kategori</label><input class="input" name="category" list="cats" required maxlength="30" placeholder="Contoh: Sembako" value="${escapeHtml(values.category)}"><datalist id="cats">${categoryOptions}</datalist></div>

@@ -168,7 +168,7 @@ textarea.input{resize:vertical;min-height:88px}
 .skeleton{height:230px;border-radius:var(--r);background:linear-gradient(90deg,var(--bg-soft),var(--surface),var(--bg-soft));background-size:200% 100%;animation:sh 1.3s infinite}
 
 /* ---------- Pesanan ---------- */
-.receipts{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:22px;align-items:start}
+.receipts{--gap:22px;display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:var(--gap);align-items:start}
 .receipt{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:22px;box-shadow:var(--shadow);transition:box-shadow .25s}
 .receipt:hover{box-shadow:var(--shadow-lg)}
 .r-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
@@ -389,11 +389,17 @@ html.lock{overflow:hidden}
 .revenue strong{color:var(--accent)}
 
 /* ---- Cara bayar dan Beli lagi ---- */
-.r-pay{background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:12px;display:grid;gap:8px}
-.pay-row{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px}
-.pay-row span{color:var(--ink2);font-size:.92rem}
-.pay-row b{overflow-wrap:anywhere}
+.r-pay{background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:14px}
+.r-pay-head{display:block;font-size:.95rem;color:var(--warn);margin-bottom:6px}
+.pay-row{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"label btn" "value btn";column-gap:10px;row-gap:1px;align-items:center;padding:9px 0;border-top:1px dashed var(--warn-line)}
+.r-pay>.pay-row:first-child,.r-pay-head+.pay-row{border-top:0;padding-top:2px}
+.pay-row span{grid-area:label;color:var(--ink2);font-size:.8rem;font-weight:600}
+.pay-row b{grid-area:value;font-size:1rem;line-height:1.35;overflow-wrap:anywhere}
+.pay-row .btn{grid-area:btn}
+.pay-row.static{grid-template-columns:minmax(0,1fr);grid-template-areas:"label" "value"}
+.pay-row.static b{color:var(--warn)}
 .r-pay .btn.sm{background:#fff}
+.r-pay-hint{margin-top:8px;padding-top:10px;border-top:1px dashed var(--warn-line);font-size:.84rem;line-height:1.5;color:var(--ink2)}
 
 /* ---- Layar masuk ---- */
 .auth-card .input::placeholder{color:#5b7391}
@@ -803,3 +809,40 @@ html.lock{overflow:hidden}
   .shelf.rows .lfoot{flex-direction:column;align-items:flex-end;justify-content:center;gap:8px;width:132px;padding:10px 12px 10px 4px}
   .shelf.rows .lfoot .btn,.shelf.rows .lfoot .qty.sm{width:100%;min-width:0}
 }
+
+/* ---------- Foto produk ---------- */
+.tile.has-photo{height:auto;min-height:0;aspect-ratio:4/3;padding:0;background:var(--bg-soft);overflow:hidden}
+.tile .photo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;transition:transform .35s var(--ease)}
+.label:hover .tile .photo{transform:scale(1.05)}
+.tile.has-photo .cat{position:absolute;left:12px;top:10px;z-index:1;box-shadow:0 1px 4px rgba(12,35,66,.25)}
+@media(hover:none){.label:hover .tile .photo{transform:none}}
+.shelf.rows .tile.has-photo{aspect-ratio:auto}
+/* Bila ada produk berfoto, kartu tanpa foto (emoji) memakai ukuran tile yang sama */
+.shelf.photos:not(.rows) .tile{height:auto;min-height:0;aspect-ratio:4/3;padding:0;align-items:center;justify-content:center}
+.shelf.photos:not(.rows) .tile .cat{position:absolute;left:12px;top:10px}
+.shelf.photos:not(.rows) .tile .ini{margin:0}
+.dtile.has-photo{display:block;min-height:0;padding:0;background:var(--bg-soft);overflow:hidden}
+.dtile .photo{display:block;width:100%;max-height:300px;object-fit:contain;border-radius:16px}
+.dtile.has-photo .tag{z-index:1;box-shadow:0 1px 4px rgba(12,35,66,.25)}
+.mini.has-photo{overflow:hidden;background:var(--bg-soft)}
+.mini img{width:100%;height:100%;object-fit:cover;display:block}
+.fly.photo{background-size:cover;background-position:center;border-radius:14px;font-size:0;border:2px solid #fff}
+.photo-row{display:flex;gap:14px;align-items:center}
+.photo-preview{flex:none;width:96px;height:96px;border-radius:var(--r-sm);border:1.5px dashed var(--field);background:var(--bg-soft);display:grid;place-items:center;overflow:hidden;font-size:2rem}
+.photo-preview img{width:100%;height:100%;object-fit:cover;display:block}
+.photo-side{display:flex;flex-direction:column;gap:8px;min-width:0}
+.photo-side .acts{flex-wrap:wrap}
+.photo-side [hidden]{display:none!important}
+@media(prefers-reduced-motion:reduce){.tile .photo{transition:none}.label:hover .tile .photo{transform:none}}
+
+/* === Daftar pesanan: kartu rapat + info kirim yang rapi === */
+.receipts.rapat{grid-auto-rows:1px;grid-auto-flow:row dense;row-gap:0}   /* tinggi tiap kartu diatur lewat layout.js */
+.receipt{min-width:0}
+.receipt.st-pending{border-color:var(--warn-line)}
+.steps li span{text-wrap:balance}
+.r-info{display:grid;gap:7px;margin:0 0 14px;font-size:.92rem}
+.r-info>div{display:grid;grid-template-columns:62px minmax(0,1fr);gap:10px;align-items:baseline}
+.r-info dt{color:var(--muted)}
+.r-info dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
+.r-auto{margin:0 0 14px;padding:8px 10px;border-radius:var(--r-sm);background:var(--bg-soft);color:var(--ink2);font-size:.86rem;line-height:1.45}
+.receipt .acts:empty{display:none}

@@ -27,6 +27,7 @@ Environment variable
                   Tanpa SMTP_HOST dan pengirim (SMTP_FROM atau SMTP_USER), tombol "Lupa password" tidak tampil.
     Variabel yang dibiarkan kosong diperlakukan sama seperti tidak diisi (memakai nilai bawaan).
 """
+import base64
 import getpass
 import hashlib
 import hmac
@@ -83,6 +84,11 @@ if not SECRET_KEY:
         raise RuntimeError("SECRET_KEY belum diset di Environment Variables Vercel.")
     SECRET_KEY = "dev-only-secret-ganti-di-produksi"
 
+# Body JSON biasanya kecil. Hanya tambah/ubah produk yang boleh lebih besar karena membawa foto (data URL).
+MAX_JSON_BYTES = 64 * 1024
+MAX_PRODUCT_BODY_BYTES = 512 * 1024
+PRODUCT_WRITE_RE = re.compile(r"/api/products(?:/[0-9a-fA-F]{24})?")
+
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=SECRET_KEY,
@@ -90,7 +96,7 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=IS_VERCEL,
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
-    MAX_CONTENT_LENGTH=64 * 1024,
+    MAX_CONTENT_LENGTH=MAX_PRODUCT_BODY_BYTES,   # batas 64 KB untuk route lain dijaga di guard()
 )
 
 # Role
@@ -356,6 +362,33 @@ def is_strong_password(password):
     )
 
 
+IMAGE_MAX_CHARS = 300_000   # panjang data URL (sekitar 220 KB); frontend mengecilkan foto menjadi sekitar 100 KB
+IMAGE_RE = re.compile(r"data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})")
+
+
+def decode_image(raw):
+    """Data URL gambar -> (bytes, mime). Isi diperiksa (base64 sah dan tanda file sesuai jenisnya),
+    jadi hanya JPEG, PNG, dan WebP asli yang tersimpan. ValueError berisi pesan untuk pengguna."""
+    if len(raw) > IMAGE_MAX_CHARS:
+        raise ValueError("Foto terlalu besar. Pilih foto lain.")
+    match = IMAGE_RE.fullmatch(raw)
+    if not match:
+        raise ValueError("Foto tidak valid. Gunakan JPG, PNG, atau WebP.")
+    mime, payload = match.groups()
+    try:
+        data = base64.b64decode(payload, validate=True)
+    except ValueError:
+        raise ValueError("Foto tidak valid. Gunakan JPG, PNG, atau WebP.") from None
+    signature_ok = (
+        (mime == "image/jpeg" and data[:3] == b"\xff\xd8\xff")
+        or (mime == "image/png" and data[:8] == b"\x89PNG\r\n\x1a\n")
+        or (mime == "image/webp" and data[:4] == b"RIFF" and data[8:12] == b"WEBP")
+    )
+    if not signature_ok:
+        raise ValueError("Foto tidak valid. Gunakan JPG, PNG, atau WebP.")
+    return data, mime
+
+
 class Form:
     """Validator sederhana: kumpulkan semua error per-field lalu raise sekali."""
 
@@ -419,6 +452,23 @@ class Form:
         else:
             self.out[name] = number
 
+    def image(self, name="image", label="Foto"):
+        """Foto sebagai data URL. Kunci tidak dikirim: foto lama dibiarkan. Kosong: foto dihapus (None).
+        Valid: (bytes, mime)."""
+        if name not in self.data:
+            return
+        raw = self.data[name]
+        if raw is None or raw == "":
+            self.out[name] = None
+            return
+        if not isinstance(raw, str):
+            self.errors[name] = f"{label} tidak valid"
+            return
+        try:
+            self.out[name] = decode_image(raw)
+        except ValueError as exc:
+            self.errors[name] = str(exc)
+
     def choice(self, name, label, options):
         raw = self.data.get(name)
         if not isinstance(raw, str) or raw not in options:
@@ -449,7 +499,8 @@ def object_id(value, label="ID"):
 # Serialisasi (dokumen Mongo -> JSON)
 # --------------------------------------------------------------------------- #
 HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key", "session_version",
-                 "reset_code_hash", "reset_expires", "reset_sent_at", "reset_failed", "reset_locked_until")
+                 "reset_code_hash", "reset_expires", "reset_sent_at", "reset_failed", "reset_locked_until",
+                 "image", "image_type", "image_v")   # foto produk: dikirim lewat /api/products/<id>/image
 
 
 def serialize_value(value):
@@ -600,6 +651,9 @@ def csrf_token_valid():
 @app.before_request
 def guard():
     if request.path.startswith("/api/") and request.method not in SAFE_METHODS:
+        too_big = request.content_length and request.content_length > MAX_JSON_BYTES
+        if too_big and not (request.method in ("POST", "PUT") and PRODUCT_WRITE_RE.fullmatch(request.path)):
+            raise ApiError("Data terlalu besar", 413)
         if not csrf_token_valid():
             raise ApiError("Token keamanan tidak valid. Muat ulang halaman.", 403)
         if not request.is_json:
@@ -610,7 +664,7 @@ def guard():
 def secure_headers(resp):
     resp.headers.update(SECURITY_HEADERS)
     if request.path.startswith("/api/"):
-        resp.headers["Cache-Control"] = "no-store"
+        resp.headers.setdefault("Cache-Control", "no-store")   # route foto mengatur cache-nya sendiri
     elif resp.mimetype == "text/html":
         resp.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
         resp.headers["Cache-Control"] = "no-cache"
@@ -974,7 +1028,32 @@ def product_form(data):
     form.integer("price", "Harga", 100, 100_000_000)
     form.integer("stock", "Stok", 0, 100_000)
     form.text("description", "Deskripsi", 0, 300, required=False, multiline=True)
+    form.image("image", "Foto produk")
     return form.done()
+
+
+# Bytes foto tidak ikut dibaca saat daftar produk dimuat; klien mengambilnya lewat /api/products/<id>/image
+NO_IMAGE = {"image": 0}
+
+
+def product_json(doc):
+    """Produk -> JSON. Bila ada foto, `photo` berisi alamat fotonya (?v= berganti saat foto diganti,
+    jadi browser boleh menyimpannya lama)."""
+    out = serialize(doc)
+    if doc.get("image_v"):
+        out["photo"] = f"/api/products/{out['id']}/image?v={int(doc['image_v'])}"
+    return out
+
+
+def split_image(clean):
+    """Pisahkan foto dari isian produk. Mengembalikan (field untuk $set, field untuk $unset)."""
+    if "image" not in clean:
+        return {}, {}
+    image = clean.pop("image")
+    if image is None:
+        return {}, {"image": "", "image_type": "", "image_v": ""}
+    data, mime = image
+    return {"image": data, "image_type": mime, "image_v": int(time.time() * 1000)}, {}
 
 
 def text_search_term(search):
@@ -995,7 +1074,7 @@ def search_products(db, search, category):
     if term:
         text_query = {**base, "$text": {"$search": term}}
         try:
-            docs = list(collection.find(text_query, {"_score": {"$meta": "textScore"}})
+            docs = list(collection.find(text_query, {"_score": {"$meta": "textScore"}, **NO_IMAGE})
                         .sort([("_score", {"$meta": "textScore"})]).limit(PRODUCTS_LIMIT))
         except OperationFailure as exc:   # mis. indeks teks gagal dibuat; pencarian tetap jalan lewat regex
             app.logger.warning("Pencarian teks gagal, memakai regex: %s", exc)
@@ -1005,7 +1084,7 @@ def search_products(db, search, category):
                 doc.pop("_score", None)   # skor hanya untuk pengurutan, tidak dikirim ke klien
             return docs, text_query
     regex_query = {**base, "name": {"$regex": re.escape(search), "$options": "i"}}
-    docs = list(collection.find(regex_query).sort("name", 1).limit(PRODUCTS_LIMIT))
+    docs = list(collection.find(regex_query, NO_IMAGE).sort("name", 1).limit(PRODUCTS_LIMIT))
     return docs, regex_query
 
 
@@ -1020,9 +1099,9 @@ def products_list():
         docs, query = search_products(db, search, category)
     else:
         query = {"category": category} if category else {}
-        docs = list(db[PRODUCT_COLLECTION].find(query).sort("name", 1).limit(PRODUCTS_LIMIT))
+        docs = list(db[PRODUCT_COLLECTION].find(query, NO_IMAGE).sort("name", 1).limit(PRODUCTS_LIMIT))
     categories = sorted(c for c in db[PRODUCT_COLLECTION].distinct("category") if isinstance(c, str))
-    return jsonify({"products": [serialize(p) for p in docs], "categories": categories,
+    return jsonify({"products": [product_json(p) for p in docs], "categories": categories,
                     "total": db[PRODUCT_COLLECTION].count_documents(query)})
 
 
@@ -1030,11 +1109,14 @@ def products_list():
 @roles_required(*STAFF_ROLES)
 def products_create():
     clean = product_form(json_body())
+    image_set, _ = split_image(clean)
+    clean.update(image_set)
     clean["created_at"] = clean["updated_at"] = utcnow()
     db = get_db()
     result = db[PRODUCT_COLLECTION].insert_one(clean)
-    audit("produk_tambah", clean["name"])
-    return jsonify({"product": serialize(db[PRODUCT_COLLECTION].find_one({"_id": result.inserted_id}))}), 201
+    audit("produk_tambah", clean["name"] + (" (dengan foto)" if image_set else ""))
+    created = db[PRODUCT_COLLECTION].find_one({"_id": result.inserted_id}, NO_IMAGE)
+    return jsonify({"product": product_json(created)}), 201
 
 
 def parse_base_stock(data):
@@ -1054,6 +1136,8 @@ def products_update(product_id):
     target_id = object_id(product_id, "Produk")
     body = json_body()
     clean = product_form(body)
+    image_set, image_unset = split_image(clean)
+    clean.update(image_set)
     base_stock = parse_base_stock(body)
     clean["updated_at"] = utcnow()
     db = get_db()
@@ -1064,6 +1148,8 @@ def products_update(product_id):
     query = {"_id": target_id}
     new_stock = clean.pop("stock")
     update = {"$set": clean}
+    if image_unset:
+        update["$unset"] = image_unset
     delta = None
     if base_stock is None:
         clean["stock"] = new_stock
@@ -1079,8 +1165,21 @@ def products_update(product_id):
         if not collection.find_one({"_id": target_id}):
             raise ApiError("Produk tidak ditemukan", 404)
         raise ApiError("Stok berubah karena ada penjualan. Muat ulang halaman lalu coba lagi.", 409)
-    audit("produk_ubah", clean["name"] + (f" (stok {delta:+d})" if delta else ""))
-    return jsonify({"product": serialize(collection.find_one({"_id": target_id}))})
+    photo_note = " (foto diganti)" if image_set else " (foto dihapus)" if image_unset else ""
+    audit("produk_ubah", clean["name"] + (f" (stok {delta:+d})" if delta else "") + photo_note)
+    return jsonify({"product": product_json(collection.find_one({"_id": target_id}, NO_IMAGE))})
+
+
+@app.get("/api/products/<product_id>/image")
+@login_required
+def products_image(product_id):
+    target_id = object_id(product_id, "Produk")
+    doc = get_db()[PRODUCT_COLLECTION].find_one({"_id": target_id}, {"image": 1, "image_type": 1})
+    if not doc or not doc.get("image"):
+        raise ApiError("Foto tidak ditemukan", 404)
+    resp = Response(bytes(doc["image"]), mimetype=doc.get("image_type") or "image/jpeg")
+    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"   # alamat berganti (?v=) saat foto berganti
+    return resp
 
 
 @app.delete("/api/products/<product_id>")
@@ -1196,7 +1295,7 @@ def reserve_stock(db, wanted, expected_prices=None):
     reserved, lines = [], []
     try:
         for product_id, qty in wanted.items():
-            product = db[PRODUCT_COLLECTION].find_one({"_id": product_id})
+            product = db[PRODUCT_COLLECTION].find_one({"_id": product_id}, NO_IMAGE)
             if not product:
                 raise ApiError("Ada produk yang sudah tidak tersedia", 404)
             seen_price = (expected_prices or {}).get(product_id)
@@ -1428,7 +1527,7 @@ def stats():
     db = get_db()
     sweep_expired_orders(db)
     by_status, revenue = order_summary(db)
-    low_stock = (db[PRODUCT_COLLECTION].find({"stock": {"$lte": LOW_STOCK_LIMIT}})
+    low_stock = (db[PRODUCT_COLLECTION].find({"stock": {"$lte": LOW_STOCK_LIMIT}}, NO_IMAGE)
                  .sort("stock", 1).limit(LOW_STOCK_LIST_SIZE))
     recent = db.orders.find().sort("created_at", -1).limit(RECENT_ORDERS_SIZE)
     result = {
@@ -1436,7 +1535,7 @@ def stats():
         "today": today_summary(db),
         "orders": {"total": sum(by_status.values()), **by_status},
         "products": db[PRODUCT_COLLECTION].count_documents({}),
-        "low_stock": [serialize(p) for p in low_stock],
+        "low_stock": [product_json(p) for p in low_stock],
         "recent": [serialize(o) for o in recent],
         "users": None,
     }
