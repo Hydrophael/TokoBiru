@@ -89,6 +89,7 @@ export const state = {
   categories: [],
   category: '',
   query: '',
+  searchIds: null,       // id produk hasil pencarian server, urut menurut relevansi (null = pakai filter lokal)
   sort: 'name',
   cart: {},              // id produk -> jumlah
 

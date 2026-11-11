@@ -213,6 +213,15 @@ def ensure_indexes(db):
     db[PRODUCT_COLLECTION].create_index([("name", ASCENDING)])
     db[PRODUCT_COLLECTION].create_index([("category", ASCENDING)])
     db[PRODUCT_COLLECTION].create_index([("stock", ASCENDING)])
+    # Indeks teks untuk pencarian produk. Bobot: nama paling penting, lalu kategori, lalu deskripsi.
+    # default_language="none": MongoDB tidak punya stemming/stop word bahasa Indonesia.
+    # Satu collection hanya boleh punya satu indeks teks.
+    db[PRODUCT_COLLECTION].create_index(
+        [("name", "text"), ("category", "text"), ("description", "text")],
+        weights={"name": 5, "category": 2, "description": 1},
+        default_language="none",
+        name="product_text",
+    )
     db.orders.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
     db.orders.create_index([("status", ASCENDING), ("created_at", ASCENDING)])
     # daftar pesanan staf, "pesanan terbaru" di dashboard, dan ringkasan hari ini hanya memakai created_at
@@ -968,6 +977,38 @@ def product_form(data):
     return form.done()
 
 
+def text_search_term(search):
+    """Siapkan teks untuk $text. Tanda kutip dan awalan '-' punya arti khusus di $text
+    (frasa dan pengecualian), jadi dibuang supaya masukan pengguna dibaca sebagai kata biasa."""
+    words = (word.replace('"', "").replace("\\", "").lstrip("-") for word in search.split())
+    return " ".join(word for word in words if word)
+
+
+def search_products(db, search, category):
+    """Cari produk. Tahap 1: indeks teks, diurutkan menurut relevansi. Tahap 2 (bila tahap 1 kosong,
+    mis. kata belum lengkap seperti "ber" untuk "Beras", atau indeks teks tidak tersedia): regex pada nama.
+
+    Mengembalikan (daftar produk, filter yang dipakai) supaya total dihitung dengan filter yang sama."""
+    collection = db[PRODUCT_COLLECTION]
+    base = {"category": category} if category else {}
+    term = text_search_term(search)
+    if term:
+        text_query = {**base, "$text": {"$search": term}}
+        try:
+            docs = list(collection.find(text_query, {"_score": {"$meta": "textScore"}})
+                        .sort([("_score", {"$meta": "textScore"})]).limit(PRODUCTS_LIMIT))
+        except OperationFailure as exc:   # mis. indeks teks gagal dibuat; pencarian tetap jalan lewat regex
+            app.logger.warning("Pencarian teks gagal, memakai regex: %s", exc)
+            docs = []
+        if docs:
+            for doc in docs:
+                doc.pop("_score", None)   # skor hanya untuk pengurutan, tidak dikirim ke klien
+            return docs, text_query
+    regex_query = {**base, "name": {"$regex": re.escape(search), "$options": "i"}}
+    docs = list(collection.find(regex_query).sort("name", 1).limit(PRODUCTS_LIMIT))
+    return docs, regex_query
+
+
 @app.get("/api/products")
 @login_required
 def products_list():
@@ -975,12 +1016,11 @@ def products_list():
     sweep_expired_orders(db)   # stok dari pesanan kedaluwarsa kembali sebelum katalog dikirim
     search = sanitize(str(request.args.get("q", ""))[:50])
     category = sanitize(str(request.args.get("category", ""))[:30])
-    query = {}
     if search:
-        query["name"] = {"$regex": re.escape(search), "$options": "i"}
-    if category:
-        query["category"] = category
-    docs = list(db[PRODUCT_COLLECTION].find(query).sort("name", 1).limit(PRODUCTS_LIMIT))
+        docs, query = search_products(db, search, category)
+    else:
+        query = {"category": category} if category else {}
+        docs = list(db[PRODUCT_COLLECTION].find(query).sort("name", 1).limit(PRODUCTS_LIMIT))
     categories = sorted(c for c in db[PRODUCT_COLLECTION].distinct("category") if isinstance(c, str))
     return jsonify({"products": [serialize(p) for p in docs], "categories": categories,
                     "total": db[PRODUCT_COLLECTION].count_documents(query)})

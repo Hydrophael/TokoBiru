@@ -111,6 +111,7 @@ async function show(view) {
 
   state.view = view;
   state.query = '';
+  state.searchIds = null;
   state.fresh = true;
   renderShell();
   window.scrollTo(0, 0);
@@ -187,6 +188,7 @@ async function logout() {
   state.cart = {};
   state.checkout = null;
   state.query = '';
+  state.searchIds = null;
   state.category = '';
   renderAuth('login');
   toast('Anda sudah keluar');
@@ -843,6 +845,27 @@ async function onChange(e) {
   }
 }
 
+// Pencarian produk di halaman Belanja memakai indeks teks MongoDB lewat GET /api/products?q=...
+// Hasil filter lokal tampil seketika; hasil server menggantikannya begitu tiba. Bila server gagal atau
+// kata terlalu pendek, filter lokal tetap dipakai, jadi pencarian tidak pernah "mati".
+const MIN_SERVER_SEARCH = 2;
+let searchSeq = 0;
+
+async function searchOnServer(raw) {
+  const query = raw.trim();
+  const seq = ++searchSeq;   // respons yang datang terlambat (kata sudah berubah) diabaikan
+  if (query.length < MIN_SERVER_SEARCH) return;
+
+  try {
+    const result = await api('/products?q=' + encodeURIComponent(query));
+    if (seq !== searchSeq || state.view !== 'shop' || state.query.trim() !== query) return;
+    state.searchIds = result.products.map(product => product.id);
+    renderList();
+  } catch {
+    if (seq === searchSeq) state.searchIds = null;
+  }
+}
+
 let searchDebounce;
 function onInput(e) {
   if (e.target.classList?.contains('invalid')) clearFieldError(e.target);
@@ -869,9 +892,14 @@ function onInput(e) {
   state.query = el.value;
   clearTimeout(searchDebounce);
   searchDebounce = setTimeout(() => {
-    if (el.dataset.input === 'shop-search') renderList();
-    else $('#prows').innerHTML = productRows();
-  }, 120);
+    if (el.dataset.input === 'shop-search') {
+      state.searchIds = null;      // kata berubah: tampilkan filter lokal dulu, hasil server menyusul
+      renderList();
+      searchOnServer(state.query);
+    } else {
+      $('#prows').innerHTML = productRows();
+    }
+  }, 200);
 }
 
 // Escape menutup modal/laci; Tab dikurung di dalam modal

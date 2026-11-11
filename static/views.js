@@ -344,15 +344,20 @@ const truncationNotice = () => state.productsTotal > state.products.length
 function filteredProducts() {
   const query = state.query.trim().toLowerCase();
   const sort = state.sort;
+  // Hasil pencarian server (indeks teks) dipakai bila sudah tiba; sebelum itu, filter nama di sisi klien
+  const rank = query && state.searchIds ? new Map(state.searchIds.map((id, index) => [id, index])) : null;
 
   const compare = (a, b) => {
     if (sort === 'low') return a.price - b.price;
     if (sort === 'high') return b.price - a.price;
+    if (sort === 'relevance' && rank) return rank.get(a.id) - rank.get(b.id);
     return a.name.localeCompare(b.name, 'id');
   };
 
+  const matches = p => rank ? rank.has(p.id) : (!query || p.name.toLowerCase().includes(query));
+
   return state.products
-    .filter(p => (!state.category || p.category === state.category) && (!query || p.name.toLowerCase().includes(query)))
+    .filter(p => (!state.category || p.category === state.category) && matches(p))
     .sort((a, b) => (a.stock === 0) - (b.stock === 0) || compare(a, b)); // stok habis selalu di bawah
 }
 
@@ -415,7 +420,7 @@ const shopView = () => `
   </div>
   <div class="aisle" id="aisle" aria-hidden="true">${aisleHtml()}</div>
   <div class="toolbar"><span class="muted small" id="rcount" aria-live="polite">${filteredProducts().length} produk</span>
-    <label class="sortsel">Urutkan <select class="select sm" data-sort aria-label="Urutkan produk">${sortOptionHtml('name', 'Nama A–Z')}${sortOptionHtml('low', 'Harga terendah')}${sortOptionHtml('high', 'Harga tertinggi')}</select></label></div>
+    <label class="sortsel">Urutkan <select class="select sm" data-sort aria-label="Urutkan produk">${sortOptionHtml('name', 'Nama A–Z')}${sortOptionHtml('relevance', 'Paling relevan')}${sortOptionHtml('low', 'Harga terendah')}${sortOptionHtml('high', 'Harga tertinggi')}</select></label></div>
   ${truncationNotice()}
   <div id="plist">${productCards(state.fresh)}</div>`;
 
