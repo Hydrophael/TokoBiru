@@ -131,6 +131,7 @@ def _env_int(name, default, minimum=1):
 
 # Pesanan yang belum dibayar dibatalkan otomatis dan stoknya dikembalikan
 PENDING_TTL_HOURS = _env_int("PENDING_TTL_HOURS", 24)
+LOG_RETENTION_DAYS = _env_int("LOG_RETENTION_DAYS", 90)   # log lebih lama dari ini dihapus otomatis oleh MongoDB
 # Stok ditahan sejak pesanan dibuat, jadi satu akun tidak boleh menumpuk pesanan yang belum dibayar
 MAX_PENDING_ORDERS = _env_int("MAX_PENDING_ORDERS", 3)
 EXPIRE_SWEEP_SECONDS = 60   # jeda minimum antar penyapuan per instance
@@ -238,6 +239,8 @@ def ensure_indexes(db):
                            partialFilterExpression={"idem_key": {"$type": "string"}})
     ensure_unique_order_code_index(db)
     db.logs.create_index([("ts", DESCENDING)])
+    # TTL: MongoDB menghapus log yang lebih tua dari LOG_RETENTION_DAYS, supaya koleksi tidak membengkak
+    db.logs.create_index([("ts", ASCENDING)], expireAfterSeconds=LOG_RETENTION_DAYS * 86400, name="logs_ttl")
 
 
 def get_db():
