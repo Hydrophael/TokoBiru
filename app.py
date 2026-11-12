@@ -755,7 +755,7 @@ def auth_login():
         audit("login_gagal", f"identifier={identifier[:40]}" if user else "akun tidak dikenal")
         raise ApiError("Username/email atau password salah", 401)
     if not user.get("active", True):
-        raise ApiError("Akun Anda dinonaktifkan. Hubungi master.", 403)
+        raise ApiError("Akun Anda dinonaktifkan. Silakan hubungi pengelola toko.", 403)
     db.users.update_one({"_id": user["_id"]},
                         {"$set": {"failed": 0, "last_login": now, "locked_until": None}})
     start_session(user)

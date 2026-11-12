@@ -389,7 +389,7 @@ def test_send_email_membuat_multipart_teks_dan_html(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-        def starttls(self):
+        def starttls(self, **kwargs):
             pass
 
         def login(self, user, password):
@@ -422,7 +422,7 @@ def test_send_email_tanpa_html_tetap_teks_biasa(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-        def starttls(self):
+        def starttls(self, **kwargs):
             pass
 
         def send_message(self, message):

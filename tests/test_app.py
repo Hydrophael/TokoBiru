@@ -268,13 +268,17 @@ class TestProduk:
         admin.post("/api/products", {**PRODUCT, "name": "<img src=x onerror=alert(1)>Gula"})
         assert db["master_product"].find_one()["name"] == "Gula"
 
-    def test_pencarian_dan_filter(self, admin):
+    def test_pencarian_dan_filter(self, admin, monkeypatch):
+        # mongomock tidak mendukung $text/$meta, jadi lewati tahap indeks teks dan uji jalur regex
+        monkeypatch.setattr(tokobiru, "text_search_term", lambda search: "")
         admin.post("/api/products", PRODUCT)
         admin.post("/api/products", {**PRODUCT, "name": "Sabun Mandi", "category": "Rumah"})
         assert product_names(admin.get("/api/products?q=sabun")) == ["Sabun Mandi"]
         assert product_names(admin.get("/api/products?category=Sembako")) == ["Minyak Goreng 2L"]
 
-    def test_regex_pada_pencarian_di_escape(self, admin):
+    def test_regex_pada_pencarian_di_escape(self, admin, monkeypatch):
+        # mongomock tidak mendukung $text/$meta, jadi lewati tahap indeks teks dan uji jalur regex
+        monkeypatch.setattr(tokobiru, "text_search_term", lambda search: "")
         admin.post("/api/products", PRODUCT)
         assert admin.get("/api/products?q=.*").get_json()["products"] == []
 
