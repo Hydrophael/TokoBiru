@@ -1754,6 +1754,15 @@ def index():
     return send_from_directory(TEMPLATE_DIR, "index.html", mimetype="text/html")
 
 
+@app.get("/sw.js")
+def service_worker():
+    """Service worker harus disajikan dari akar situs agar cakupannya seluruh aplikasi (bukan hanya /static/).
+    no-cache: browser selalu memeriksa versi terbaru, jadi pembaruan sampai ke pengguna setelah deploy."""
+    resp = send_from_directory(app.static_folder, "sw.js", mimetype="text/javascript")
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "create-master":
         create_master_cli()
