@@ -1000,7 +1000,7 @@ function userRowHtml(user, index = 0) {
 }
 
 const usersView = () => `
-  <div class="page-head"><div><h2>Pengguna</h2><p class="muted">Atur role, nonaktifkan, atau hapus akun. Akun master tidak bisa diubah dari sini.</p></div>
+  <div class="page-head"><div><h2>Pengguna</h2></div>
     <button class="btn primary" data-act="user-new">${icon('plus', 15)} Tambah pengguna</button></div>
   <div class="tbl-wrap${state.fresh ? ' stagger' : ''}"><table><thead><tr><th>Pengguna</th><th>Email</th><th>Role</th><th>Aktif</th><th>Terdaftar</th><th class="right">Aksi</th></tr></thead><tbody>
   ${state.users.map(userRowHtml).join('')}</tbody></table></div>`;
@@ -1253,17 +1253,53 @@ export async function showResetStep(step) {
 
 function logRowHtml(log, index = 0) {
   const isFailure = /gagal|ditolak/.test(log.action);
+  const picked = state.selectedLogs.has(log.id);
   const roleTag = log.role !== '-'
     ? `<span class="tag ${escapeHtml(log.role)}">${escapeHtml(ROLE_LABEL[log.role] || log.role)}</span>`
     : '';
-  return `<tr style="--i:${Math.min(index, 10)}"><td data-label="Waktu" class="muted small">${formatDate(log.ts)}</td><td data-label="Pengguna"><b>${escapeHtml(log.actor)}</b> ${roleTag}</td>
-    <td data-label="Aksi"><span class="tag ${isFailure ? 'err' : ''}">${escapeHtml(log.action)}</span></td><td data-label="Detail">${escapeHtml(log.detail)}</td><td data-label="IP" class="muted small">${escapeHtml(log.ip)}</td></tr>`;
+  return `<tr data-log="${log.id}" class="${picked ? 'picked' : ''}" style="--i:${Math.min(index, 10)}">
+    <td data-label="Pilih" class="pick"><input type="checkbox" class="tick" data-act="log-pick" data-id="${log.id}"${picked ? ' checked' : ''} aria-label="Pilih log ${escapeHtml(log.action)}"></td>
+    <td data-label="Waktu" class="muted small">${formatDate(log.ts)}</td><td data-label="Pengguna"><b>${escapeHtml(log.actor)}</b> ${roleTag}</td>
+    <td data-label="Aksi"><span class="tag ${isFailure ? 'err' : ''}">${escapeHtml(log.action)}</span></td><td data-label="Detail">${escapeHtml(log.detail)}</td><td data-label="IP" class="muted small">${escapeHtml(log.ip)}</td>
+    <td data-label="Hapus" class="row-del"><button class="btn sm danger" data-act="log-del" data-id="${log.id}" aria-label="Hapus log ini">${icon('trash', 15)}</button></td></tr>`;
 }
+
+// Tombol di bilah log: berubah sesuai jumlah log yang dicentang
+function logActionsHtml() {
+  const count = state.selectedLogs.size;
+  if (!count) return '';
+  return `<span class="log-count"><b>${count}</b> dipilih</span>
+    <button class="btn sm" data-act="log-clear">Batal pilih</button>
+    <button class="btn sm solid-danger" data-act="log-del-selected">${icon('trash', 15)} Hapus ${count} log</button>`;
+}
+
+// Perbarui bilah dan centang tanpa menggambar ulang tabel (fokus keyboard tidak hilang)
+export function syncLogSelection() {
+  const all = $('#log-all');
+  if (!all) return;
+  const total = state.logs.length;
+  const count = state.selectedLogs.size;
+  all.checked = count > 0 && count === total;
+  all.indeterminate = count > 0 && count < total;
+  $('#log-actions').innerHTML = logActionsHtml();
+  $$('#content tr[data-log]').forEach(row => {
+    const picked = state.selectedLogs.has(row.dataset.log);
+    row.classList.toggle('picked', picked);
+    $('.tick', row).checked = picked;
+  });
+}
+
+const logBarHtml = () => `
+  <div class="log-bar">
+    <label class="pickall"><input type="checkbox" id="log-all" data-act="log-pick-all"> Pilih semua</label>
+    <div class="log-actions" id="log-actions">${logActionsHtml()}</div>
+  </div>`;
 
 const logsView = () => `
   <div class="page-head"><div><h2>Log aktivitas</h2><p class="muted">150 aktivitas terakhir di toko, termasuk login gagal dan akses yang ditolak.</p></div><button class="btn" data-act="reload">Perbarui data</button></div>
-  <div class="tbl-wrap${state.fresh ? ' stagger' : ''}"><table><thead><tr><th>Waktu</th><th>Pengguna</th><th>Aksi</th><th>Detail</th><th>IP</th></tr></thead><tbody>
-  ${state.logs.map(logRowHtml).join('') || `<tr><td colspan="5">${emptyState('Belum ada aktivitas')}</td></tr>`}
+  ${state.logs.length ? logBarHtml() : ''}
+  <div class="tbl-wrap${state.fresh ? ' stagger' : ''}"><table><thead><tr><th class="pick"></th><th>Waktu</th><th>Pengguna</th><th>Aksi</th><th>Detail</th><th>IP</th><th></th></tr></thead><tbody>
+  ${state.logs.map(logRowHtml).join('') || `<tr><td colspan="7">${emptyState('Belum ada aktivitas')}</td></tr>`}
   </tbody></table></div>`;
 
 export const views = {

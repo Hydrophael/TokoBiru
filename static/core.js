@@ -117,7 +117,8 @@ export const state = {
   checkout: null,        // { signature, key, at }: kunci idempotensi untuk percobaan checkout yang sama
   stats: null,
   users: [],
-  logs: []
+  logs: [],
+  selectedLogs: new Set()   // id log yang dicentang untuk dihapus
 };
 
 export const isCustomer = () => state.user?.role === 'user';

@@ -1616,6 +1616,19 @@ def logs_list():
     return jsonify({"logs": [serialize(log) for log in docs]})
 
 
+@app.post("/api/logs/delete")
+@roles_required("master")
+def logs_delete():
+    """Hapus satu atau beberapa log sekaligus (hanya master). Penghapusan itu sendiri dicatat sebagai log baru."""
+    ids = json_body().get("ids")
+    if not isinstance(ids, list) or not 1 <= len(ids) <= LOGS_LIMIT:
+        raise ApiError(f"Pilih 1 sampai {LOGS_LIMIT} log", 422)
+    oids = list({object_id(item, "Log") for item in ids})
+    result = get_db().logs.delete_many({"_id": {"$in": oids}})
+    audit("log_hapus", f"{result.deleted_count} log")
+    return jsonify({"deleted": result.deleted_count})
+
+
 @app.get("/api/health")
 def health():
     get_db().command("ping")

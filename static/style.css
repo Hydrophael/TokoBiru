@@ -22,7 +22,7 @@
   --ease:cubic-bezier(.2,.8,.2,1);
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%;scrollbar-gutter:stable}   /* ruang scrollbar selalu disediakan, jadi halaman tidak bergeser saat modal mengunci scroll */
 body{font-family:var(--body);font-size:1.0625rem;color:var(--ink);background:var(--bg);line-height:1.55;min-height:100vh;-webkit-font-smoothing:antialiased;
   background-image:radial-gradient(1200px 500px at 85% -10%,var(--blue-soft),transparent 70%)}
 button,input,select,textarea{font:inherit;color:inherit}
@@ -71,7 +71,37 @@ textarea.input{resize:vertical;min-height:88px}
 .input:focus,.select:focus{border-color:var(--focus);box-shadow:0 0 0 4px var(--blue-ring)}
 .input.invalid{border-color:var(--err);box-shadow:0 0 0 4px var(--err-bg)}
 .field-err{color:var(--err);font-size:.88rem;font-weight:500}
-.select.sm{min-height:44px;padding:8px 28px 8px 10px;font-size:.92rem;width:auto}
+/* Dropdown: kursor tangan, panah dengan jarak pas, efek hover, dan daftar pilihan yang dirapikan */
+.select{cursor:pointer;-webkit-appearance:none;appearance:none;padding-right:38px;font-weight:500;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%230b5fc4' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 14px center;background-size:12px}
+.select:hover:not(:disabled){border-color:var(--blue);background-color:var(--blue-soft)}
+.select:disabled{cursor:not-allowed;opacity:.6}
+.select option{cursor:pointer;background:var(--surface);color:var(--ink);padding:8px 12px}
+
+/* Browser yang mendukung (Chrome/Edge terbaru): daftar pilihan bisa didesain penuh. Browser lain memakai tampilan standar di atas. */
+@supports (appearance:base-select){
+  .select,.select::picker(select){appearance:base-select}
+  .select{display:inline-flex;align-items:center;justify-content:space-between;gap:10px;background-image:none;padding-right:12px}
+  .select::picker-icon{content:'';width:12px;height:12px;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%230b5fc4' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") center/contain no-repeat;transition:transform .2s var(--ease)}
+  .select:open::picker-icon{transform:rotate(180deg)}
+
+  .select::picker(select){
+    margin-top:6px;padding:6px;min-width:max-content;
+    background:var(--surface);border:1.5px solid var(--line-strong);border-radius:var(--r-sm);box-shadow:var(--shadow-lg);
+    opacity:0;transform:translateY(-6px);
+    transition:opacity .16s var(--ease),transform .16s var(--ease),overlay .16s allow-discrete,display .16s allow-discrete}
+  .select::picker(select):popover-open{opacity:1;transform:none}
+  @starting-style{.select::picker(select):popover-open{opacity:0;transform:translateY(-6px)}}
+
+  .select option{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;font-size:.92rem;cursor:pointer;
+    transition:background-color .12s,color .12s}
+  .select option:hover,.select option:focus-visible{background:var(--blue-soft);color:var(--blue-text)}
+  .select option:checked{font-weight:700;color:var(--blue-text)}
+  select.select.sm{padding-right:12px}
+  .select option::checkmark{content:'\2713';order:1;margin-left:auto;color:var(--blue);font-weight:800}
+}
+.select.sm{min-height:44px;padding:8px 34px 8px 12px;font-size:.92rem;width:auto}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .form-alert{display:none;background:var(--err-bg);color:var(--err);border:1px solid var(--err-line);padding:10px 14px;border-radius:var(--r-sm);font-size:.92rem;font-weight:500;margin-bottom:16px;line-height:1.4}
 .form-alert.show{display:block;animation:fade .2s}
@@ -849,3 +879,17 @@ html.lock{overflow:hidden}
 .r-info dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
 .r-auto{margin:0 0 14px;padding:8px 10px;border-radius:var(--r-sm);background:var(--bg-soft);color:var(--ink2);font-size:.86rem;line-height:1.45}
 .receipt .acts:empty{display:none}
+
+/* === Log: pilih beberapa lalu hapus === */
+.log-bar{display:flex;align-items:center;flex-wrap:wrap;gap:10px 16px;margin-bottom:14px;padding:10px 14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm)}
+.pickall{display:flex;align-items:center;gap:10px;font-weight:600;cursor:pointer}
+.pickall input,.tick{width:22px;height:22px;accent-color:var(--blue);cursor:pointer;flex:none}
+.log-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;margin-left:auto}
+.log-count{font-size:.95rem;margin-right:4px}
+th.pick,td.pick{width:48px;padding-right:0}
+td.row-del{text-align:right;width:64px}
+tr.picked,tr.picked td{background:var(--blue-soft)}
+@media(max-width:700px){
+  .log-actions{margin-left:0;width:100%}
+  td.pick,td.row-del{width:auto;padding-right:0;text-align:left}
+}

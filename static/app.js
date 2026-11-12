@@ -62,6 +62,7 @@ import {
   updateRailEdges,
   setResetInfo,
   showOrderSuccess,
+  syncLogSelection,
   showResetStep,
   userModal,
   views
@@ -110,7 +111,12 @@ const loaders = {
   async orders() { state.orders = (await api('/orders')).orders; },
   async dashboard() { state.stats = await api('/stats'); },
   async users() { state.users = (await api('/users')).users; },
-  async logs() { state.logs = (await api('/logs')).logs; }
+  async logs() {
+    state.logs = (await api('/logs')).logs;
+    // buang centang untuk log yang sudah tidak ada
+    const present = new Set(state.logs.map(log => log.id));
+    state.selectedLogs.forEach(id => { if (!present.has(id)) state.selectedLogs.delete(id); });
+  }
 };
 
 async function show(view) {
@@ -448,6 +454,46 @@ function deleteUser(el) {
   });
 }
 
+// --- Hapus log (satu atau banyak) ---
+
+function pickLog(el) {
+  if (el.checked) state.selectedLogs.add(el.dataset.id);
+  else state.selectedLogs.delete(el.dataset.id);
+  syncLogSelection();
+}
+
+function pickAllLogs(el) {
+  state.selectedLogs.clear();
+  if (el.checked) state.logs.forEach(log => state.selectedLogs.add(log.id));
+  syncLogSelection();
+}
+
+function clearLogSelection() {
+  state.selectedLogs.clear();
+  syncLogSelection();
+}
+
+async function deleteLogs(ids) {
+  if (!ids.length) return;
+  const many = ids.length > 1;
+  const confirmed = await confirmDialog(
+    many ? `Hapus ${ids.length} log?` : 'Hapus log ini?',
+    'Log yang dihapus tidak bisa dikembalikan. Penghapusan ini sendiri akan tercatat di log.',
+    many ? `Hapus ${ids.length} log` : 'Hapus log',
+    true
+  );
+  if (!confirmed) return;
+
+  try {
+    const { deleted } = await api('/logs/delete', { method: 'POST', body: { ids } });
+    ids.forEach(id => state.selectedLogs.delete(id));
+    toast(`${deleted} log dihapus`, 'ok');
+    await reload();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
 function togglePasswordVisibility(checkbox) {
   $$('input[name=password],input[name=confirm],input[data-pw]', checkbox.closest('form')).forEach(input => {
     input.type = checkbox.checked ? 'text' : 'password';
@@ -638,6 +684,11 @@ const actions = {
   'wiz-back':      wizardBack,
   'wiz-finish':    finishReset,
   'user-del':      deleteUser,
+  'log-pick':      pickLog,
+  'log-pick-all':  pickAllLogs,
+  'log-clear':     clearLogSelection,
+  'log-del':       el => deleteLogs([el.dataset.id]),
+  'log-del-selected': () => deleteLogs([...state.selectedLogs]),
   'toggle-pw':     togglePasswordVisibility,
   'refresh-page':  () => location.reload()
 };
