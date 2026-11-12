@@ -1285,6 +1285,24 @@ def sweep_expired_orders(db, force=False):
     return cancelled
 
 
+def cancel_pending_orders(db, user_id, reason):
+    """Batalkan semua pesanan 'pending' milik satu akun dan kembalikan stoknya segera.
+
+    Dipakai saat akun dinonaktifkan atau dihapus, supaya stok tidak tertahan sampai pesanan kedaluwarsa.
+    Status dicek ulang pada filter, jadi pesanan yang baru dibayar tidak ikut dibatalkan.
+    """
+    cancelled = 0
+    for order in db.orders.find({"user_id": user_id, "status": "pending"}):
+        result = db.orders.update_one(
+            {"_id": order["_id"], "status": "pending"},
+            {"$set": {"status": "cancelled", "cancel_reason": reason, "updated_at": utcnow()}})
+        if result.modified_count != 1:
+            continue
+        release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
+        cancelled += 1
+    return cancelled
+
+
 def reserve_stock(db, wanted, expected_prices=None):
     """Kurangi stok tiap produk secara atomik dan kembalikan (reserved, baris pesanan).
 
@@ -1590,7 +1608,12 @@ def users_update(user_id):
     if not changes:
         raise ApiError("Tidak ada perubahan", 422)
     db.users.update_one({"_id": target_id}, {"$set": changes})
-    audit("user_ubah", f"{target['username']}: {changes}")
+    detail = f"{target['username']}: {changes}"
+    if changes.get("active") is False:
+        freed = cancel_pending_orders(db, target_id, "account_disabled")
+        if freed:
+            detail += f" ({freed} pesanan belum dibayar dibatalkan)"
+    audit("user_ubah", detail)
     return jsonify({"user": serialize(db.users.find_one({"_id": target_id}))})
 
 
@@ -1604,8 +1627,9 @@ def users_delete(user_id):
         raise ApiError("Pengguna tidak ditemukan", 404)
     if target["_id"] == current_user()["_id"] or target["role"] == "master":
         raise ApiError("Akun master tidak dapat dihapus", 403)
+    freed = cancel_pending_orders(db, target_id, "account_deleted")
     db.users.delete_one({"_id": target_id})
-    audit("user_hapus", target["username"])
+    audit("user_hapus", target["username"] + (f" ({freed} pesanan belum dibayar dibatalkan)" if freed else ""))
     return jsonify({"ok": True})
 
 
