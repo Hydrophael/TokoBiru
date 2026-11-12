@@ -989,7 +989,15 @@ async function onChange(e) {
   const id = el.dataset.id;
 
   try {
-    if (el.dataset.change === 'user-role') await api('/users/' + id, { method: 'PATCH', body: { role: el.value } });
+    if (el.dataset.change === 'user-role') {
+      // menjadikan seseorang Admin memberi akses penuh ke produk dan pesanan, jadi harus dikonfirmasi
+      if (el.value === 'admin') {
+        const target = state.users.find(user => user.id === id);
+        const ok = await confirmDialog('Jadikan Admin?', `${target ? '@' + target.username : 'Pengguna ini'} akan bisa mengelola produk, pesanan, dan melihat pendapatan toko.`, 'Jadikan Admin');
+        if (!ok) { await reload(); return; }   // batal: kembalikan pilihan ke role semula
+      }
+      await api('/users/' + id, { method: 'PATCH', body: { role: el.value } });
+    }
     if (el.dataset.change === 'user-active') await api('/users/' + id, { method: 'PATCH', body: { active: el.checked } });
     toast('Perubahan disimpan', 'ok');
     await reload();
