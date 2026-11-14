@@ -41,6 +41,7 @@ import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from email.utils import make_msgid
 from functools import wraps
 from html import escape as html_escape
 
@@ -810,8 +811,9 @@ RESET_FIELDS = {"reset_code_hash": "", "reset_expires": "", "reset_sent_at": ""}
 RESET_GUARD_FIELDS = {"reset_failed": "", "reset_locked_until": ""}
 
 
-def send_email(to, subject, body, html=None):
-    """Kirim email lewat SMTP: teks biasa, plus versi HTML bila `html` diberikan. Dipisah dari route supaya mudah diganti di tes."""
+def send_email(to, subject, body, html=None, inline_images=None):
+    """Kirim email lewat SMTP: teks biasa, plus versi HTML bila `html` diberikan. Dipisah dari route supaya mudah diganti di tes.
+    `inline_images`: {cid: bytes PNG} untuk gambar yang dipanggil di HTML lewat src="cid:..." (ikut terkirim di dalam email)."""
     message = EmailMessage()
     message["From"] = SMTP_FROM
     message["To"] = to
@@ -819,6 +821,8 @@ def send_email(to, subject, body, html=None):
     message.set_content(body)
     if html:
         message.add_alternative(html, subtype="html")
+        for cid, data in (inline_images or {}).items():
+            message.get_payload()[1].add_related(data, "image", "png", cid=f"<{cid}>", disposition="inline")
     use_ssl = SMTP_PORT == 465
     # Konteks bawaan smtplib TIDAK memeriksa sertifikat server; create_default_context() memeriksanya
     context = ssl.create_default_context()
@@ -842,19 +846,37 @@ def reset_email_text(name, code):
             "Jika Anda tidak merasa memintanya, abaikan email ini; password Anda tidak berubah.\n")
 
 
-def reset_email_html(name, code):
-    """Versi HTML email kode reset. Hanya `name` yang berasal dari data pengguna, dan di-escape."""
+EMAIL_LOGO_FILE = os.path.join(BASE_DIR, "static", "icons", "icon-192.png")
+
+
+def load_email_logo():
+    """Logo TokoBiru (PNG) untuk header email, atau None bila file tidak terbaca: email tetap terkirim, hanya tanpa logo."""
+    try:
+        with open(EMAIL_LOGO_FILE, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def reset_email_html(name, code, logo_cid=None):
+    """Versi HTML email kode reset. Hanya `name` yang berasal dari data pengguna, dan di-escape.
+    `logo_cid`: bila diisi, logo ditampilkan dari gambar inline dengan CID itu (lihat send_email)."""
     name = html_escape(name)
+    mark = (f'<td style="padding-right:10px"><img src="cid:{logo_cid}" width="40" height="40" alt="" '
+            'style="display:block;border:0;border-radius:11px"></td>') if logo_cid else ""
+    brand = ('<table role="presentation" cellpadding="0" cellspacing="0"><tr>' + mark +
+             '<td style="font-size:22px;font-weight:bold;color:#0c2342;letter-spacing:-0.5px">TokoBiru</td></tr></table>')
     return f"""<!DOCTYPE html>
 <html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:24px 12px;background:#eef4fb;font-family:Arial,Helvetica,sans-serif;color:#0c2342">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
 <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%;background:#ffffff;border-radius:14px;overflow:hidden">
-<tr><td style="background:#0b5fc4;padding:20px 28px;color:#ffffff;font-size:20px;font-weight:bold"><span style="color:#ffc61a">&#9679;</span>&nbsp; TokoBiru</td></tr>
+<tr><td style="border-top:4px solid #0b5fc4;padding:20px 28px 0">{brand}</td></tr>
 <tr><td style="padding:28px">
 <p style="margin:0 0 12px;font-size:16px;line-height:1.5">Halo {name},</p>
 <p style="margin:0 0 16px;font-size:16px;line-height:1.5">Gunakan kode ini untuk membuat password baru:</p>
-<p style="margin:0 0 20px;padding:16px;background:#e3eefc;border-radius:10px;text-align:center;font-size:32px;font-weight:bold;letter-spacing:8px;font-family:Consolas,Menlo,monospace;color:#0a4ea3">{code}</p>
+<p style="margin:0 0 8px;padding:16px;background:#e3eefc;border-radius:10px;text-align:center;font-size:32px;font-weight:bold;font-family:Consolas,Menlo,monospace;color:#0a4ea3"><span style="letter-spacing:6px;-webkit-user-select:all;user-select:all">{code}</span></p>
+<p style="margin:0 0 20px;font-size:13px;line-height:1.5;color:#566f89;text-align:center">Ketuk dan tahan kode di atas, lalu pilih Salin. Atau salin dari sini: <span style="font-family:Consolas,Menlo,monospace;font-size:15px;color:#0c2342;-webkit-user-select:all;user-select:all">{code}</span></p>
 <p style="margin:0 0 12px;font-size:14px;line-height:1.6">Kode berlaku {RESET_CODE_MINUTES} menit dan hanya bisa dipakai sekali. Jangan bagikan kode ini kepada siapa pun, termasuk yang mengaku dari TokoBiru.</p>
 <p style="margin:0;font-size:14px;line-height:1.6;color:#566f89">Jika Anda tidak merasa memintanya, abaikan email ini; password Anda tidak berubah.</p>
 </td></tr></table>
@@ -906,8 +928,11 @@ def auth_forgot():
             "reset_sent_at": now}})
         try:
             name = user.get("name") or "pelanggan"
+            logo = load_email_logo()
+            logo_cid = make_msgid(domain="tokobiru.local")[1:-1] if logo else None
             send_email(user["email"], "Kode reset password TokoBiru",
-                       reset_email_text(name, code), html=reset_email_html(name, code))
+                       reset_email_text(name, code), html=reset_email_html(name, code, logo_cid),
+                       inline_images={logo_cid: logo} if logo else None)
         except Exception as exc:   # smtplib punya banyak jenis error; apa pun yang terjadi, kode tidak jadi dipakai
             app.logger.error("Gagal mengirim email reset password: %s", exc)
             db.users.update_one({"_id": user["_id"]}, {"$unset": RESET_FIELDS})   # boleh langsung coba lagi

@@ -75,7 +75,7 @@ hooks.onSessionExpired = () => {
   renderAuth();
   toast('Sesi berakhir. Masuk lagi untuk melanjutkan.', 'err');
   // sesi di server sudah dibersihkan, jadi token CSRF lama tidak berlaku lagi untuk login berikutnya
-  api('/auth/me').then(me => { state.csrf = me.csrf; }).catch(() => {});
+  api('/auth/me').then(me => { state.csrf = me.csrf; }).catch(() => { });
 };
 
 // === Alur aplikasi: sesi, navigasi, pemuatan data ===
@@ -639,58 +639,58 @@ function updatePasswordChecks(form) {
 
 // data-act -> handler(elemen, event)
 const actions = {
-  'auth-tab':      el => renderAuth(el.dataset.tab),
-  nav:             el => show(el.dataset.view),
+  'auth-tab': el => renderAuth(el.dataset.tab),
+  nav: el => show(el.dataset.view),
   reload,
   logout,
-  'close-modal':   closeModal,
+  'close-modal': closeModal,
   // modal bertanda data-keep (isian panjang, mis. pemulihan password) tidak tertutup oleh ketukan di luar
-  overlay:         (el, e) => { if (e.target === el && !el.querySelector('[data-keep]')) closeModal(); },
-  'ask-ok':        confirmAccepted,
-  cat:             filterByCategory,
-  'open-filter':   filterModal,
-  'apply-filter':  applyFilters,
+  overlay: (el, e) => { if (e.target === el && !el.querySelector('[data-keep]')) closeModal(); },
+  'ask-ok': confirmAccepted,
+  cat: filterByCategory,
+  'open-filter': filterModal,
+  'apply-filter': applyFilters,
   'reset-filters': resetFilters,
-  'rm-filter':     removeFilter,
-  'clear-all':     clearAllFilters,
-  'clear-search':  clearSearch,
-  layout:          setLayout,
-  more:            loadMoreProducts,
-  'to-top':        () => window.scrollTo({ top: 0, behavior: 'smooth' }),
-  'rail-prev':     () => scrollRail(-1),
-  'rail-next':     () => scrollRail(1),
-  detail:          openProductDetail,
-  'detail-add':    addFromProductDetail,
-  'add-cart':      addOneToCart,
-  'cart-inc':      addOneToCart,
-  'cart-dec':      el => setCartQty(el.dataset.id, cartQty(el.dataset.id) - 1),
-  'cart-del':      removeFromCart,
-  'open-cart':     openCart,
-  'close-cart':    closeCart,
-  checkout:        openCheckout,
-  ofilter:         filterOrders,
-  copy:            copyToClipboard,
+  'rm-filter': removeFilter,
+  'clear-all': clearAllFilters,
+  'clear-search': clearSearch,
+  layout: setLayout,
+  more: loadMoreProducts,
+  'to-top': () => window.scrollTo({ top: 0, behavior: 'smooth' }),
+  'rail-prev': () => scrollRail(-1),
+  'rail-next': () => scrollRail(1),
+  detail: openProductDetail,
+  'detail-add': addFromProductDetail,
+  'add-cart': addOneToCart,
+  'cart-inc': addOneToCart,
+  'cart-dec': el => setCartQty(el.dataset.id, cartQty(el.dataset.id) - 1),
+  'cart-del': removeFromCart,
+  'open-cart': openCart,
+  'close-cart': closeCart,
+  checkout: openCheckout,
+  ofilter: filterOrders,
+  copy: copyToClipboard,
   reorder,
-  'order-status':  changeOrderStatus,
-  'product-new':   () => productModal(null),
-  'product-edit':  el => productModal(state.productMap[el.dataset.id]),
-  'product-del':   deleteProduct,
-  'photo-pick':    el => choosePhoto(el.closest('form')),
-  'photo-clear':   el => clearPhoto(el.closest('form')),
-  'user-new':      userModal,
+  'order-status': changeOrderStatus,
+  'product-new': () => productModal(null),
+  'product-edit': el => productModal(state.productMap[el.dataset.id]),
+  'product-del': deleteProduct,
+  'photo-pick': el => choosePhoto(el.closest('form')),
+  'photo-clear': el => clearPhoto(el.closest('form')),
+  'user-new': userModal,
   'change-password': passwordModal,
-  'forgot-open':   () => forgotModal(loginEmailHint()),
+  'forgot-open': () => forgotModal(loginEmailHint()),
   'forgot-resend': resendResetCode,
-  'wiz-back':      wizardBack,
-  'wiz-finish':    finishReset,
-  'user-del':      deleteUser,
-  'log-pick':      pickLog,
-  'log-pick-all':  pickAllLogs,
-  'log-clear':     clearLogSelection,
-  'log-del':       el => deleteLogs([el.dataset.id]),
+  'wiz-back': wizardBack,
+  'wiz-finish': finishReset,
+  'user-del': deleteUser,
+  'log-pick': pickLog,
+  'log-pick-all': pickAllLogs,
+  'log-clear': clearLogSelection,
+  'log-del': el => deleteLogs([el.dataset.id]),
   'log-del-selected': () => deleteLogs([...state.selectedLogs]),
-  'toggle-pw':     togglePasswordVisibility,
-  'refresh-page':  () => location.reload()
+  'toggle-pw': togglePasswordVisibility,
+  'refresh-page': () => location.reload()
 };
 
 // === Form ===
@@ -784,10 +784,6 @@ const formHandlers = {
   },
 
   async register(form, data) {
-    // email dipakai untuk kode lupa password; salah ketik berarti akun tidak bisa dipulihkan
-    if (String(data.email).trim().toLowerCase() !== String(data.email_confirm).trim().toLowerCase()) {
-      throw validationError({ email_confirm: 'Email tidak sama' });
-    }
     if (data.password !== data.confirm) {
       throw validationError({ confirm: 'Konfirmasi password tidak sama' });
     }

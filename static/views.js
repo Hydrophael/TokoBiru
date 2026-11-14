@@ -100,17 +100,13 @@ const registerFormHtml = () => `
       <div class="field"><label for="r-user">Username</label><input class="input" id="r-user" name="username"
         autocapitalize="none" spellcheck="false" placeholder="Pilih username unik" required maxlength="20" autocomplete="username"></div>
       </div>
-      <div class="pair">
       <div class="field"><label for="r-email">Email</label><input class="input" id="r-email" name="email"
-        type="email" placeholder="nama@email.com" required maxlength="120" autocomplete="email" autocapitalize="none" spellcheck="false"></div>
-      <div class="field"><label for="r-email2">Ulangi email</label><input class="input" id="r-email2" name="email_confirm"
-        type="email" placeholder="Ketik ulang email" required maxlength="120" autocomplete="off" autocapitalize="none" spellcheck="false"></div>
-      </div>
+        type="email" placeholder="nama@gmail.com" required maxlength="120" autocomplete="email" autocapitalize="none" spellcheck="false"></div>
       <div class="pair">
       <div class="field"><label for="r-pw">Password</label><input class="input" id="r-pw" name="password"
         type="password" placeholder="Minimal 8 karakter" required minlength="8" maxlength="128" autocomplete="new-password" aria-describedby="r-pw-hint"></div>
       <div class="field"><label for="r-pw2">Ulangi password</label><input class="input" id="r-pw2" name="confirm"
-        type="password" placeholder="Ulangi password" required autocomplete="new-password"></div>
+        type="password" required autocomplete="new-password"></div>
       </div>
       <p class="muted small" id="r-pw-hint" style="margin:-2px 0 10px">Minimal 8 karakter, berisi huruf dan angka.</p>
       <label class="showpw"><input type="checkbox" data-act="toggle-pw"> Tampilkan password</label>
@@ -127,8 +123,8 @@ function authArtHtml() {
   return `<section class="auth-art">
       ${brandHtml('color:var(--hero-ink)')}
       <div class="art-body">
-        <h1><span class="ln"><span>Rak penuh,</span></span><span class="ln"><span>stok jujur.</span></span></h1>
-        <p>Pilih barang, isi keranjang, dan pantau pesanan sampai tiba. Pemilik toko melihat stok dan penjualan di tempat yang sama.</p>
+        <h1><span class="ln"><span>Belanja mudah</span></span><span class="ln"><span>dari rumah.</span></span></h1>
+        <p>Beragam kebutuhan dalam satu tempat. Pilih barang, pesan dengan mudah, dan pantau pesananmu sampai tiba!</p>
         <div class="pricetag" aria-hidden="true">
           <div class="pt-head"><small>Harga rak</small><div class="pt-dots">${dots}</div></div>
           <div class="pt-slides">${slides}</div>
@@ -1011,7 +1007,7 @@ export function userModal() {
       <div class="field"><label>Nama lengkap</label><input class="input" name="name" required maxlength="50" placeholder="Nama lengkap"></div>
       <div class="row2"><div class="field"><label>Username</label><input class="input" name="username" required maxlength="20" placeholder="Username unik"></div>
       <div class="field"><label>Role</label><select class="select" name="role"><option value="admin">Admin</option><option value="user">Pelanggan</option></select></div></div>
-      <div class="field"><label>Email</label><input class="input" name="email" type="email" required maxlength="120" placeholder="nama@email.com"></div>
+      <div class="field"><label>Email</label><input class="input" name="email" type="email" required maxlength="120" placeholder="nama@gmail.com"></div>
       <div class="field"><label>Password</label><input class="input" name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="Minimal 8 karakter"></div>
       <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Buat akun</button></div></form>`);
 }
@@ -1061,7 +1057,7 @@ function resetWizardHtml(email) {
       <section class="wz-panel" data-panel="1">
         <h3>Lupa password</h3><p class="sub">Masukkan email akun Anda. Kami kirim kode 6 angka untuk membuat password baru.</p>
         <form data-form="forgot" novalidate><div class="form-alert" role="alert"></div>
-          <div class="field"><label>Email</label><input class="input" name="email" type="email" required maxlength="120" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="nama@email.com" value="${escapeHtml(email)}"></div>
+          <div class="field"><label>Email</label><input class="input" name="email" type="email" required maxlength="120" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="nama@gmail.com" value="${escapeHtml(email)}"></div>
           <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Kirim kode</button></div></form>
       </section>
       <section class="wz-panel" data-panel="2" hidden>
