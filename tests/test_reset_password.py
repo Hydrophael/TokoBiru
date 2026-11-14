@@ -23,7 +23,7 @@ def env(monkeypatch):
     monkeypatch.setattr(tb, "_last_sweep", None)
     monkeypatch.setattr(tb, "EMAIL_ENABLED", True)
     sent = []
-    monkeypatch.setattr(tb, "send_email", lambda to, subject, body, html=None: sent.append((to, body, html)))
+    monkeypatch.setattr(tb, "send_email", lambda to, subject, body, html=None, inline_images=None: sent.append((to, body, html)))
     database.users.insert_one(tb.new_user_doc(
         {"name": "Budi", "username": "budi", "email": EMAIL, "password": OLD}, "user"))
     return database, sent
@@ -227,7 +227,7 @@ def test_gagal_kirim_email_membatalkan_kode_dan_boleh_coba_lagi(env, monkeypatch
     assert post(client, "forgot", {"email": EMAIL}).status_code == 200
     user = user_doc(db)
     assert "reset_code_hash" not in user and "reset_sent_at" not in user
-    monkeypatch.setattr(tb, "send_email", lambda to, subject, body, html=None: sent.append((to, body, html)))
+    monkeypatch.setattr(tb, "send_email", lambda to, subject, body, html=None, inline_images=None: sent.append((to, body, html)))
     request_code(client, sent)                           # langsung bisa meminta lagi, tanpa menunggu jeda
 
 

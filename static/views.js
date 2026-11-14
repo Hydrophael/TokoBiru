@@ -30,10 +30,15 @@ import {
   statusTag,
   stockInfo,
   stockNote,
-  storage
+  storage,
+  actionLabel,
+  detailLabel,
+  LOG_GROUPS,
+  logTone,
 } from './core.js';
 import { EASE, burst, linkLabels, openModal, reducedMotion, toast, tweenNumber } from './ui.js';
 import { PHOTO_HINT, photoPreviewHtml } from './photo.js';
+import { actionTagHtml, actorHtml, logEmptyHtml, mountLogGrid, refreshLogGrid, visibleLogIds } from './logs-grid.js';
 
 // === Modal pesanan berhasil ===
 
@@ -951,7 +956,7 @@ export function productModal(product) {
 
   openModal(`
     <h3>${isEdit ? 'Ubah produk' : 'Tambah produk'}</h3><p class="sub">${isEdit ? 'Perubahan langsung tampil di katalog pelanggan.' : 'Produk baru langsung muncul di katalog.'}</p>
-    <form data-form="product" data-id="${isEdit ? product.id : ''}" novalidate>
+    <form data-form="product" data-id="${isEdit ? product.id : ''}" autocomplete="off" novalidate>
       <div class="form-alert" role="alert"></div>
       ${isEdit ? `<input type="hidden" name="base_stock" value="${escapeHtml(product.stock)}">` : ''}
       <div class="field photo-field"><label>Foto produk (opsional)</label>
@@ -965,7 +970,7 @@ export function productModal(product) {
             <p class="muted small" data-photo-note>${PHOTO_HINT}</p>
           </div>
         </div></div>
-      <div class="field"><label>Nama produk</label><input class="input" name="name" required maxlength="80" placeholder="Contoh: Beras Premium 5 kg" value="${escapeHtml(values.name)}"></div>
+      <div class="field"><label>Nama produk</label><input class="input" name="name" required maxlength="80" autocomplete="off" placeholder="Contoh: Beras Premium 5 kg" value="${escapeHtml(values.name)}"></div>
       <div class="row2">
         <div class="field"><label>Kategori</label><input class="input" name="category" list="cats" required maxlength="30" placeholder="Contoh: Sembako" value="${escapeHtml(values.category)}"><datalist id="cats">${categoryOptions}</datalist></div>
         <div class="field"><label>Harga (Rp)</label><input class="input" name="price" type="number" placeholder="Contoh: 38000" min="100" max="100000000" step="1" required value="${escapeHtml(values.price)}"></div>
@@ -1248,55 +1253,92 @@ export async function showResetStep(step) {
 // --- Log ---
 
 function logRowHtml(log, index = 0) {
-  const isFailure = /gagal|ditolak/.test(log.action);
   const picked = state.selectedLogs.has(log.id);
-  const roleTag = log.role !== '-'
-    ? `<span class="tag ${escapeHtml(log.role)}">${escapeHtml(ROLE_LABEL[log.role] || log.role)}</span>`
-    : '';
-  return `<tr data-log="${log.id}" class="${picked ? 'picked' : ''}" style="--i:${Math.min(index, 10)}">
-    <td data-label="Pilih" class="pick"><input type="checkbox" class="tick" data-act="log-pick" data-id="${log.id}"${picked ? ' checked' : ''} aria-label="Pilih log ${escapeHtml(log.action)}"></td>
-    <td data-label="Waktu" class="muted small">${formatDate(log.ts)}</td><td data-label="Pengguna"><b>${escapeHtml(log.actor)}</b> ${roleTag}</td>
-    <td data-label="Aksi"><span class="tag ${isFailure ? 'err' : ''}">${escapeHtml(log.action)}</span></td><td data-label="Detail">${escapeHtml(log.detail)}</td><td data-label="IP" class="muted small">${escapeHtml(log.ip)}</td>
-    <td data-label="Hapus" class="row-del"><button class="btn sm danger" data-act="log-del" data-id="${log.id}" aria-label="Hapus log ini">${icon('trash', 15)}</button></td></tr>`;
+  const alert = logTone(log.action) === 'err';
+  return `<tr data-log="${log.id}" class="${picked ? 'picked' : ''}${alert ? ' log-alert' : ''}" style="--i:${Math.min(index, 10)}">
+    <td data-label="Pilih" class="pick"><input type="checkbox" class="tick" data-act="log-pick" data-id="${log.id}"${picked ? ' checked' : ''} aria-label="Pilih log ${escapeHtml(actionLabel(log.action))}"></td>
+    <td data-label="Waktu" class="muted small log-time">${formatDate(log.ts)}</td><td data-label="Pengguna">${actorHtml(log)}</td>
+    <td data-label="Aksi">${actionTagHtml(log)}</td><td data-label="Detail">${escapeHtml(detailLabel(log))}</td><td data-label="IP" class="muted small log-ip">${escapeHtml(log.ip)}</td>
+    <td data-label="Hapus" class="row-del"><button type="button" class="btn sm flat log-del" data-act="log-del" data-id="${log.id}" aria-label="Hapus log ${escapeHtml(actionLabel(log.action))}" title="Hapus log ini">${icon('trash', 16)}</button></td></tr>`;
 }
 
-// Tombol di bilah log: berubah sesuai jumlah log yang dicentang
+// Isi bilah status di toolbar: jumlah log yang tampil, atau tombol hapus bila ada yang dicentang
 function logActionsHtml() {
   const count = state.selectedLogs.size;
-  if (!count) return '';
+  if (!count) {
+    const shown = visibleLogIds().length;
+    const total = state.logs.length;
+    return `<span class="log-count">${shown === total ? `${total} log` : `Menampilkan <b>${shown}</b> dari ${total} log`}</span>`;
+  }
   return `<span class="log-count"><b>${count}</b> dipilih</span>
-    <button class="btn sm" data-act="log-clear">Batal pilih</button>
-    <button class="btn sm solid-danger" data-act="log-del-selected">${icon('trash', 15)} Hapus ${count} log</button>`;
+    <button type="button" class="btn sm" data-act="log-clear">Batal pilih</button>
+    <button type="button" class="btn sm solid-danger" data-act="log-del-selected">${icon('trash', 15)} Hapus ${count} log</button>`;
 }
 
-// Perbarui bilah dan centang tanpa menggambar ulang tabel (fokus keyboard tidak hilang)
+// Perbarui toolbar dan centang tanpa menggambar ulang tabel (fokus keyboard tidak hilang)
 export function syncLogSelection() {
-  const all = $('#log-all');
-  if (!all) return;
-  const total = state.logs.length;
-  const count = state.selectedLogs.size;
-  all.checked = count > 0 && count === total;
-  all.indeterminate = count > 0 && count < total;
-  $('#log-actions').innerHTML = logActionsHtml();
+  const boxes = $$('[data-act="log-pick-all"]');   // di kepala tabel, dan di toolbar untuk layar sempit
+  const actions = $('#log-actions');
+  if (!boxes.length || !actions) return;
+
+  // "Pilih semua" hanya menghitung log yang sedang tampil (bisa difilter)
+  const visible = visibleLogIds();
+  const pickedVisible = visible.filter(id => state.selectedLogs.has(id)).length;
+  for (const box of boxes) {
+    box.checked = pickedVisible > 0 && pickedVisible === visible.length;
+    box.indeterminate = pickedVisible > 0 && pickedVisible < visible.length;
+    box.disabled = !visible.length;
+  }
+  actions.innerHTML = logActionsHtml();
+  actions.classList.toggle('is-bulk', state.selectedLogs.size > 0);
   $$('#content tr[data-log]').forEach(row => {
     const picked = state.selectedLogs.has(row.dataset.log);
     row.classList.toggle('picked', picked);
     $('.tick', row).checked = picked;
   });
+  refreshLogGrid();
 }
 
-const logBarHtml = () => `
-  <div class="log-bar">
-    <label class="pickall"><input type="checkbox" id="log-all" data-act="log-pick-all"> Pilih semua</label>
-    <div class="log-actions" id="log-actions">${logActionsHtml()}</div>
-  </div>`;
+// Dipanggil setelah halaman Log digambar: tabel diganti Webix bila tersedia (lihat logs-grid.js)
+export const afterLogsRender = () => mountLogGrid(syncLogSelection);
 
-const logsView = () => `
-  <div class="page-head"><div><h2>Log aktivitas</h2><p class="muted">150 aktivitas terakhir di toko, termasuk login gagal dan akses yang ditolak.</p></div><button class="btn" data-act="reload">Perbarui data</button></div>
-  ${state.logs.length ? logBarHtml() : ''}
-  <div class="tbl-wrap${state.fresh ? ' stagger' : ''}"><table><thead><tr><th class="pick"></th><th>Waktu</th><th>Pengguna</th><th>Aksi</th><th>Detail</th><th>IP</th><th></th></tr></thead><tbody>
+// Toolbar: cari, saring menurut aksi, kelompok cepat, dan status/hapus banyak
+function logToolsHtml() {
+  const { q, group, action } = state.logFilter;
+  const actions = [...new Set(state.logs.map(log => log.action))]
+    .sort((a, b) => actionLabel(a).localeCompare(actionLabel(b), 'id'));
+  const countIn = test => state.logs.filter(log => test(log.action)).length;
+  return `
+  <div class="log-tools">
+    <div class="log-find">
+      <div class="log-search">
+        ${icon('search', 18)}
+        <input type="search" data-log-q value="${escapeHtml(q)}" placeholder="Cari pengguna, aksi, detail, atau IP" aria-label="Cari log" autocomplete="off" spellcheck="false">
+        <button type="button" class="log-q-clear" data-act="log-q-clear" aria-label="Hapus kata kunci"${q ? '' : ' hidden'}>${icon('x', 16)}</button>
+      </div>
+      <select class="select log-action" data-log-action aria-label="Saring menurut aksi">
+        <option value="">Semua aksi</option>
+        ${actions.map(code => `<option value="${escapeHtml(code)}"${code === action ? ' selected' : ''}>${escapeHtml(actionLabel(code))}</option>`).join('')}
+      </select>
+    </div>
+    <div class="log-groups" role="group" aria-label="Kelompok log">
+      ${LOG_GROUPS.map(item => `<button type="button" class="log-chip${item.id === 'alert' ? ' is-alert' : ''}" data-act="log-group" data-group="${item.id}" aria-pressed="${item.id === group}">${item.label}${item.id === 'alert' ? `<span class="log-chip-n">${countIn(item.test)}</span>` : ''}</button>`).join('')}
+    </div>
+    <label class="pickall log-all-m"><input type="checkbox" class="tick" data-act="log-pick-all" aria-label="Pilih semua log yang tampil"> Pilih semua yang tampil</label>
+    <div class="log-status" id="log-actions" role="status" aria-live="polite">${logActionsHtml()}</div>
+  </div>`;
+}
+
+const logsView = () => {
+  // aksi yang dipilih bisa hilang setelah log dihapus: lepas filternya supaya tabel tidak kosong tanpa sebab
+  if (state.logFilter.action && !state.logs.some(log => log.action === state.logFilter.action)) state.logFilter.action = '';
+  return `
+  <div class="page-head"><div><h2>Log aktivitas</h2><p class="muted">${state.logs.length} aktivitas terakhir di toko.</p></div><button class="btn" data-act="reload">Perbarui data</button></div>
+  ${state.logs.length ? logToolsHtml() : ''}
+  <div class="tbl-wrap log-table${state.fresh ? ' stagger' : ''}" id="log-host"><table><thead><tr><th class="pick"><input type="checkbox" class="tick" data-act="log-pick-all" aria-label="Pilih semua log yang tampil"></th><th>Waktu</th><th>Pengguna</th><th>Aksi</th><th>Detail</th><th>IP</th><th><span class="sr-only">Hapus</span></th></tr></thead><tbody>
   ${state.logs.map(logRowHtml).join('') || `<tr><td colspan="7">${emptyState('Belum ada aktivitas')}</td></tr>`}
-  </tbody></table></div>`;
+  </tbody></table><div class="log-empty" id="log-none" hidden>${logEmptyHtml()}</div></div>`;
+};
 
 export const views = {
   shop: shopView,

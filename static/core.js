@@ -13,6 +13,72 @@ export const STATUS = {
   cancelled: ['Dibatalkan', 'err']
 };
 
+// Nama aksi log yang ramah dibaca. Kode di database tetap bentuk lama (login_gagal, dst.); hanya tampilannya yang diubah.
+const ACTION_LABEL = {
+  register: 'Daftar Akun', login: 'Login', login_gagal: 'Login Gagal', logout: 'Logout',
+  password_ubah: 'Password Diubah', password_gagal: 'Ganti Password Gagal', reset_minta: 'Minta Reset Password',
+  password_reset: 'Password Direset', reset_gagal: 'Reset Gagal',
+  produk_tambah: 'Produk Ditambah', produk_ubah: 'Produk Diubah', produk_hapus: 'Produk Dihapus',
+  pesanan_buat: 'Pesanan Dibuat', pesanan_status: 'Status Pesanan Berubah', pesanan_kedaluwarsa: 'Pesanan Kedaluwarsa',
+  user_buat: 'Pengguna Dibuat', user_ubah: 'Pengguna Diubah', user_hapus: 'Pengguna Dihapus',
+  akses_ditolak: 'Akses Ditolak'
+};
+
+// Huruf pertama tiap kata dibuat kapital. Alamat email dibiarkan; kata yang diawali tanda baca ("/api", "=") tidak diubah.
+const capitalizeWords = text => String(text ?? '').replace(/(^|\s)(\S+)/g, (_, space, word) =>
+  space + (word.includes('@') ? word : word.replace(/^([(\["“]*)(\p{Ll})/u, (_m, open, ch) => open + ch.toUpperCase())));
+
+export const actionLabel = action => ACTION_LABEL[action] || capitalizeWords(String(action ?? '').replace(/_/g, ' '));
+
+// Detail perubahan pengguna dari server berbentuk kamus Python ("siti: {'role': 'user'}"): diubah jadi kalimat biasa
+const DETAIL_KEY = { role: 'peran', active: 'status' };
+const DETAIL_VALUE = { user: 'Pelanggan', admin: 'Admin', master: 'Master', True: 'Aktif', False: 'Nonaktif' };
+const plainChanges = text => text.replace(/\{([^{}]*)\}/g, (_, body) => body.split(',')
+  .map(pair => {
+    const [key, value] = pair.split(':').map(part => part.trim().replace(/^['"]|['"]$/g, ''));
+    return value === undefined ? pair.trim() : `${DETAIL_KEY[key] || key} → ${DETAIL_VALUE[value] || value}`;
+  }).join(', '));
+
+export function detailLabel(log) {
+  let text = plainChanges(String(log.detail ?? ''));
+  if (log.action === 'pesanan_status') {   // "pending -> paid" jadi "Menunggu bayar → Dibayar"
+    text = text.replace(/\b(pending|paid|shipped|completed|cancelled)\b/g, key => STATUS[key][0]).replace(' -> ', ' → ');
+  }
+  return capitalizeWords(text);
+}
+
+// Warna tag aksi: merah = gagal/ditolak, kuning = penghapusan, hijau = dibuat, biru = diubah, netral = masuk/keluar
+export function logTone(action) {
+  if (/gagal|ditolak/.test(action)) return 'err';
+  if (/_hapus$|kedaluwarsa/.test(action)) return 'warn';
+  if (/^(register|produk_tambah|user_buat|pesanan_buat)$/.test(action)) return 'ok';
+  if (/_ubah$|_status$|password_reset|reset_minta/.test(action)) return 'info';
+  return '';
+}
+
+// Kelompok cepat di atas tabel Log (menurut kode aksi di database)
+export const LOG_GROUPS = [
+  { id: '',        label: 'Semua',            test: () => true },
+  { id: 'alert',   label: 'Perlu dicek',      test: action => /gagal|ditolak/.test(action) },
+  { id: 'auth',    label: 'Login & password', test: action => /^(register|login|logout|password_|reset_)/.test(action) },
+  { id: 'order',   label: 'Pesanan',          test: action => action.startsWith('pesanan_') },
+  { id: 'product', label: 'Produk',           test: action => action.startsWith('produk_') },
+  { id: 'user',    label: 'Pengguna',         test: action => action.startsWith('user_') }
+];
+
+// Log yang lolos filter di state.logFilter (dipakai tabel Webix, tabel HTML, dan hitungan)
+export function filteredLogs() {
+  const { q, group, action } = state.logFilter;
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const inGroup = (LOG_GROUPS.find(item => item.id === group) || LOG_GROUPS[0]).test;
+  return state.logs.filter(log => {
+    if (!inGroup(log.action) || (action && log.action !== action)) return false;
+    if (!words.length) return true;
+    const haystack = `${log.actor} ${ROLE_LABEL[log.role] || ''} ${actionLabel(log.action)} ${detailLabel(log)} ${log.ip}`.toLowerCase();
+    return words.every(word => haystack.includes(word));
+  });
+}
+
 // urutan langkah di timeline
 export const ORDER_FLOW = ['pending', 'paid', 'shipped', 'completed'];
 
@@ -118,7 +184,8 @@ export const state = {
   stats: null,
   users: [],
   logs: [],
-  selectedLogs: new Set()   // id log yang dicentang untuk dihapus
+  selectedLogs: new Set(),  // id log yang dicentang untuk dihapus
+  logFilter: { q: '', group: '', action: '' }   // filter halaman Log: kata kunci, kelompok, kode aksi
 };
 
 export const isCustomer = () => state.user?.role === 'user';

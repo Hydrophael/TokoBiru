@@ -578,7 +578,7 @@ SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; script-src 'self'; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src https://fonts.gstatic.com; img-src 'self' data:; "
+    "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; "
     "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 )
 SECURITY_HEADERS = {
@@ -1664,20 +1664,20 @@ def users_delete(user_id):
 @app.get("/api/logs")
 @roles_required("master")
 def logs_list():
-    docs = get_db().logs.find().sort("ts", -1).limit(LOGS_LIMIT)
+    # "log_hapus" tidak lagi dibuat, tapi baris lama (atau dari server berkode lama) tidak boleh tampil di daftar
+    docs = get_db().logs.find({"action": {"$ne": "log_hapus"}}).sort("ts", -1).limit(LOGS_LIMIT)
     return jsonify({"logs": [serialize(log) for log in docs]})
 
 
 @app.post("/api/logs/delete")
 @roles_required("master")
 def logs_delete():
-    """Hapus satu atau beberapa log sekaligus (hanya master). Penghapusan itu sendiri dicatat sebagai log baru."""
+    """Hapus satu atau beberapa log sekaligus (hanya master). Penghapusan tidak dicatat sebagai log baru."""
     ids = json_body().get("ids")
     if not isinstance(ids, list) or not 1 <= len(ids) <= LOGS_LIMIT:
         raise ApiError(f"Pilih 1 sampai {LOGS_LIMIT} log", 422)
     oids = list({object_id(item, "Log") for item in ids})
     result = get_db().logs.delete_many({"_id": {"$in": oids}})
-    audit("log_hapus", f"{result.deleted_count} log")
     return jsonify({"deleted": result.deleted_count})
 
 

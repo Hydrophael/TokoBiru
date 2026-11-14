@@ -1,0 +1,70 @@
+/* TokoBiru - tema Webix: mengikuti variabel di style.css (biru toko, putih rak, garis tipis).
+   Semua aturan dibatasi di .grid-host, jadi tidak mempengaruhi bagian lain.
+   File ini dimuat bersama Webix (hanya untuk master di halaman Log), setelah webix.min.css.
+   Pencarian dan filter ada di toolbar di atas tabel (lihat .log-tools di style.css), bukan di kepala kolom. */
+
+.grid-host{overflow:hidden}
+
+.grid-host .webix_view,
+.grid-host .webix_dtable{font-family:var(--body);font-size:.97rem;color:var(--ink);background:var(--surface)}
+.grid-host .webix_view{border:0}
+
+/* Kepala tabel */
+.grid-host .webix_ss_header .webix_hcell{
+  background:var(--bg-soft);color:var(--ink2);font-weight:700;font-size:.9rem;
+  border-color:var(--line);border-bottom:1px solid var(--line)
+}
+.grid-host .webix_ss_header .webix_hcell:hover{color:var(--blue-text)}
+.grid-host .webix_ss_header .webix_hcell.tb-pickhead{display:flex;align-items:center}
+.grid-host .webix_ss_header .webix_hcell.tb-pickhead:hover{color:var(--ink2)}
+
+/* Baris */
+.grid-host .webix_cell{border-color:var(--line);color:var(--ink);display:flex;align-items:center;gap:8px;line-height:1.35!important}
+/* Webix memberi sel line-height setinggi barisnya; label (.tag) mewarisinya dan jadi oval besar */
+.grid-host .webix_cell .tag{line-height:1.3!important;flex:none}
+/* Tag yang berdiri sendiri di sel (kolom Aksi) tampak sekitar 1px lebih tinggi dari teks di sebelahnya: turunkan 1px */
+.grid-host .webix_cell > .tag{position:relative;top:1px}
+.grid-host .webix_cell.tb-muted{color:var(--muted);font-size:.92rem}
+.grid-host .webix_cell.tb-nowrap{white-space:nowrap}
+.grid-host .webix_cell.tb-num{font-variant-numeric:tabular-nums}
+.grid-host .webix_cell.tb-wrap{white-space:normal;padding-top:7px;padding-bottom:7px;word-break:break-word}
+/* Webix mengukur tinggi teks Detail di elemen 1px berkelas sel. Elemen itu harus berukuran huruf yang sama dengan sel asli
+   dan berupa blok biasa (di-flex tengah, tingginya terbaca separuh), kalau tidak baris yang membungkus terpotong. */
+.grid-host .webix_measure_size{display:block!important;font-family:var(--body)!important;font-size:.97rem!important;line-height:1.35!important}
+.grid-host .webix_cell.tb-end{justify-content:center;padding-left:0;padding-right:0}
+.grid-host .webix_cell.tb-hover{background:var(--bg)!important}
+.grid-host .webix_cell.picked{background:var(--blue-soft)!important}
+
+/* Baris gagal/ditolak: latar merah sangat tipis dan garis merah di tepi kiri (tag tetap menyebut jenisnya dengan teks) */
+.grid-host .webix_cell.log-alert{background:#fff8f8;background:color-mix(in srgb,var(--err-bg) 40%,var(--surface))}
+.grid-host .webix_cell.log-alert.tb-edge{box-shadow:inset 3px 0 0 var(--err)}
+
+/* Kotak centang dan tombol di dalam sel memakai gaya aplikasi (.tick, .btn) */
+.grid-host .webix_cell .tick,
+.grid-host .webix_hcell .tick{margin:0}
+
+/* Tombol hapus: tenang sampai baris disorot atau difokus; di layar sentuh selalu terlihat */
+.grid-host .webix_cell .log-del{opacity:.55;transition:opacity .15s,background .15s,color .15s}
+.grid-host .webix_cell.tb-hover .log-del,
+.grid-host .webix_cell .log-del:focus-visible{opacity:1}
+@media(hover:none){.grid-host .webix_cell .log-del{opacity:1}}
+
+/* Penanda urutan */
+.grid-host .webix_ss_header .webix_ss_sort_asc,
+.grid-host .webix_ss_header .webix_ss_sort_desc{color:var(--blue)}
+
+/* Pesan "tidak ada yang cocok" */
+.grid-host .webix_overlay{background:var(--surface);color:var(--muted);font-weight:500}
+.grid-host .webix_overlay .log-empty-box{height:100%;align-content:center;padding:20px}
+
+/* Gulir: bilah tipis berwarna lembut */
+.grid-host .webix_ss_vscroll,
+.grid-host .webix_ss_hscroll{background:transparent;scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
+
+/* Garis bawah kepala tabel: Webix memakai cyan (#5ccce7), diganti dengan garis tipis aplikasi */
+.grid-host .webix_dtable .webix_ss_header .webix_hcolumn div.webix_last_row,
+.grid-host .webix_dtable .webix_ss_header .webix_span.webix_last_row{border-bottom-color:var(--line)}
+.grid-host .webix_dtable div.webix_ss_vscroll_header{border-bottom-color:var(--line)}
+
+/* Kursor tangan pada kepala kolom yang bisa diurutkan */
+.grid-host .webix_ss_header .webix_hcell.tb-sortable{cursor:pointer}

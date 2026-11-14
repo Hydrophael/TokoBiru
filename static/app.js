@@ -40,7 +40,9 @@ import {
 } from './ui.js';
 import { choosePhoto, clearPhoto, handlePhotoInput } from './photo.js';
 import './layout.js';   // tata letak kartu pesanan yang rapat (tanpa ruang kosong)
+import { applyLogFilter, visibleLogIds } from './logs-grid.js';
 import {
+  afterLogsRender,
   afterShopRender,
   appendCards,
   cartLines,
@@ -112,7 +114,8 @@ const loaders = {
   async dashboard() { state.stats = await api('/stats'); },
   async users() { state.users = (await api('/users')).users; },
   async logs() {
-    state.logs = (await api('/logs')).logs;
+    // "log_hapus" tidak ditampilkan (pengaman bila server masih berkode lama atau ada baris lama)
+    state.logs = (await api('/logs')).logs.filter(log => log.action !== 'log_hapus');
     // buang centang untuk log yang sudah tidak ada
     const present = new Set(state.logs.map(log => log.id));
     state.selectedLogs.forEach(id => { if (!present.has(id)) state.selectedLogs.delete(id); });
@@ -126,6 +129,7 @@ async function show(view) {
   state.view = view;
   state.query = '';
   state.searchIds = null;
+  state.logFilter = { q: '', group: '', action: '' };   // filter Log dimulai bersih tiap halaman dibuka
   state.fresh = true;
   renderShell();
   window.scrollTo(0, 0);
@@ -140,6 +144,7 @@ async function reload() {
     content.innerHTML = views[state.view]();
     if (state.view === 'dashboard') animateDashboard(content);
     if (state.view === 'shop') afterShopRender();
+    if (state.view === 'logs') afterLogsRender();
     if (isCustomer()) drawCart();
     if (state.fresh) setTimeout(() => $$('#content .stagger').forEach(el => el.classList.remove('stagger')), 1200);
   } catch (err) {
@@ -464,8 +469,40 @@ function pickLog(el) {
 
 function pickAllLogs(el) {
   state.selectedLogs.clear();
-  if (el.checked) state.logs.forEach(log => state.selectedLogs.add(log.id));
+  if (el.checked) visibleLogIds().forEach(id => state.selectedLogs.add(id));   // hanya log yang tampil (bisa terfilter)
   syncLogSelection();
+}
+
+// --- Filter Log (toolbar di atas tabel) ---
+
+let logSearchTimer = 0;
+function typeLogSearch(input) {
+  state.logFilter.q = input.value;
+  const clear = $('.log-q-clear');
+  if (clear) clear.hidden = !input.value;   // tombol hapus langsung muncul; tabel menyusul setelah jeda singkat
+  clearTimeout(logSearchTimer);
+  logSearchTimer = setTimeout(applyLogFilter, 150);
+}
+
+function setLogGroup(el) {
+  state.logFilter.group = el.dataset.group;
+  applyLogFilter();
+}
+
+function setLogAction(el) {
+  state.logFilter.action = el.value;
+  applyLogFilter();
+}
+
+function clearLogSearch() {
+  state.logFilter.q = '';
+  applyLogFilter();
+  $('[data-log-q]')?.focus();
+}
+
+function resetLogFilter() {
+  state.logFilter = { q: '', group: '', action: '' };
+  applyLogFilter();
 }
 
 function clearLogSelection() {
@@ -478,7 +515,7 @@ async function deleteLogs(ids) {
   const many = ids.length > 1;
   const confirmed = await confirmDialog(
     many ? `Hapus ${ids.length} log?` : 'Hapus log ini?',
-    'Log yang dihapus tidak bisa dikembalikan. Penghapusan ini sendiri akan tercatat di log.',
+    'Log yang dihapus tidak bisa dikembalikan.',
     many ? `Hapus ${ids.length} log` : 'Hapus log',
     true
   );
@@ -687,6 +724,9 @@ const actions = {
   'log-pick': pickLog,
   'log-pick-all': pickAllLogs,
   'log-clear': clearLogSelection,
+  'log-group': setLogGroup,
+  'log-q-clear': clearLogSearch,
+  'log-reset': resetLogFilter,
   'log-del': el => deleteLogs([el.dataset.id]),
   'log-del-selected': () => deleteLogs([...state.selectedLogs]),
   'toggle-pw': togglePasswordVisibility,
@@ -971,6 +1011,7 @@ function onClick(e) {
 }
 
 async function onChange(e) {
+  if (e.target.matches('[data-log-action]')) { setLogAction(e.target); return; }
   if (e.target.matches('[data-photo-input]')) { await handlePhotoInput(e.target); return; }
 
   if (e.target.matches('[data-sort]')) {
@@ -1026,6 +1067,7 @@ async function searchOnServer(raw) {
 
 let searchDebounce;
 function onInput(e) {
+  if (e.target.matches('[data-log-q]')) { typeLogSearch(e.target); return; }
   if (e.target.classList?.contains('invalid')) clearFieldError(e.target);
 
   // kode reset hanya angka (tempel "123 456" pun jadi 123456)

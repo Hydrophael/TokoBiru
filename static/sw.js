@@ -8,7 +8,7 @@
 
 const CACHE = 'tokobiru-shell-v1';
 const SHELL = ['/', '/static/style.css', '/static/app.js', '/static/core.js', '/static/views.js',
-  '/static/ui.js', '/static/photo.js', '/static/layout.js'];
+  '/static/ui.js', '/static/photo.js', '/static/layout.js', '/static/logs-grid.js'];
 
 self.addEventListener('install', event => {
   event.waitUntil(
