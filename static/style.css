@@ -497,6 +497,7 @@ html.lock{overflow:hidden}
 .auth-art::before{content:'';position:absolute;inset:0;z-index:0;pointer-events:none;background-image:radial-gradient(rgba(255,255,255,.16) 1.2px,transparent 1.4px);background-size:24px 24px;-webkit-mask-image:radial-gradient(ellipse 70% 60% at 85% 15%,#000,transparent 75%);mask-image:radial-gradient(ellipse 70% 60% at 85% 15%,#000,transparent 75%)}
 .auth-art::after{content:'';position:absolute;right:-180px;bottom:90px;width:520px;height:520px;border-radius:50%;pointer-events:none;border:1px solid rgba(255,255,255,.1);box-shadow:0 0 0 70px rgba(255,255,255,.025),0 0 0 140px rgba(255,255,255,.02)}
 .auth-art .brand{position:relative;z-index:2}
+.auth-art .brand .mark{box-shadow:0 0 0 2px rgba(255,255,255,.85),0 2px 8px rgba(4,18,48,.3)}   /* logo di latar biru: garis tepi putih supaya tidak menyatu */
 .alt{margin-top:16px;text-align:center;font-size:.95rem}
 .linkbtn{background:none;border:0;padding:6px 4px;font:inherit;font-weight:700;color:var(--blue-text);cursor:pointer;border-radius:6px;text-decoration:underline;text-underline-offset:3px}
 .linkbtn:hover{color:var(--blue-d)}
