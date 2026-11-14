@@ -1582,6 +1582,8 @@ def stats():
         "orders": {"total": sum(by_status.values()), **by_status},
         "products": db[PRODUCT_COLLECTION].count_documents({}),
         "low_stock": [product_json(p) for p in low_stock],
+        "low_stock_total": db[PRODUCT_COLLECTION].count_documents({"stock": {"$lte": LOW_STOCK_LIMIT}}),
+        "out_of_stock_total": db[PRODUCT_COLLECTION].count_documents({"stock": 0}),
         "recent": [serialize(o) for o in recent],
         "users": None,
     }

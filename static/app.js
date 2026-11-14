@@ -456,6 +456,14 @@ function setProductGroup(el) {
   applyProductFilter();
 }
 
+// Kotak dan batang di Ringkasan membuka halaman yang relevan, dengan filter yang sudah terpasang
+async function dashboardGo(el) {
+  const { view, status, group } = el.dataset;
+  if (status !== undefined) state.orderFilter = status;
+  await show(view);
+  if (group) { state.productFilter.group = group; applyProductFilter(); }
+}
+
 function clearProductSearch() {
   clearTimeout(searchDebounce);
   state.query = '';
@@ -705,6 +713,7 @@ function updatePasswordChecks(form) {
 const actions = {
   'auth-tab': el => renderAuth(el.dataset.tab),
   nav: el => show(el.dataset.view),
+  'dash-go': dashboardGo,
   reload,
   logout,
   'close-modal': closeModal,

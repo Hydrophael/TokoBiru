@@ -176,7 +176,7 @@ export function animateDashboard(root) {
     requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.width = width; }));
   });
 
-  $$('.revenue strong, .fact b', root).forEach(el => {
+  $$('.revenue strong, .fact b, .hstat b', root).forEach(el => {
     const text = el.textContent;
     const target = parseInt(text.replace(/\D/g, ''), 10);
     const isMoney = text.startsWith('Rp');
