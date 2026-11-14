@@ -35,10 +35,14 @@ import {
   detailLabel,
   LOG_GROUPS,
   logTone,
+  PRODUCT_GROUPS,
+  managedProducts,
+  productGroupCount,
 } from './core.js';
 import { EASE, burst, linkLabels, openModal, reducedMotion, toast, tweenNumber } from './ui.js';
 import { PHOTO_HINT, photoPreviewHtml } from './photo.js';
 import { actionTagHtml, actorHtml, logEmptyHtml, mountLogGrid, refreshLogGrid, visibleLogIds } from './logs-grid.js';
+import { mountProductGrid, productActionsHtml, productCountHtml, productNameHtml, productResetHtml } from './products-grid.js';
 
 // === Modal pesanan berhasil ===
 
@@ -918,35 +922,69 @@ function dashboardView() {
 // --- Produk ---
 
 function productRowHtml(product, index = 0) {
-  return `<tr style="--i:${Math.min(index, 10)}">
-    <td data-label="Produk"><div class="cell">${miniHtml(product)}<div><b>${escapeHtml(product.name)}</b><div class="muted small">${escapeHtml(String(product.description ?? '').slice(0, 60))}</div></div></div></td>
-    <td data-label="Kategori"><span class="tag">${escapeHtml(product.category)}</span></td><td data-label="Harga"><b class="num">${formatRupiah(product.price)}</b></td><td data-label="Stok">${stockInfo(product)}</td>
-    <td data-label="Aksi"><div class="acts end"><button class="btn sm" data-act="product-edit" data-id="${product.id}">${icon('edit', 13)} Ubah</button>
-      <button class="btn sm danger" data-act="product-del" data-id="${product.id}" aria-label="Hapus ${escapeHtml(product.name)}">${icon('trash', 13)}</button></div></td></tr>`;
+  return `<tr style="--i:${Math.min(index, 10)}"${product.stock === 0 ? ' class="prod-out"' : ''}>
+    <td data-label="Produk">${productNameHtml(product)}</td>
+    <td data-label="Kategori"><span class="tag">${escapeHtml(product.category)}</span></td>
+    <td data-label="Harga" class="num-cell"><b class="num">${formatRupiah(product.price)}</b></td>
+    <td data-label="Stok">${stockInfo(product)}</td>
+    <td data-label="Aksi">${productActionsHtml(product)}</td></tr>`;
 }
 
+const productAddButton = () => `<button type="button" class="btn primary" data-act="product-new">${icon('plus', 15)} Tambah produk</button>`;
+
 export function productRows() {
-  const query = state.query.trim().toLowerCase();
-  const list = state.products.filter(p =>
-    !query || p.name.toLowerCase().includes(query) || p.category.toLowerCase().includes(query)
-  );
+  const list = managedProducts();
 
   if (!list.length) {
     const hasProducts = state.products.length > 0;
-    return `<tr><td colspan="5">${emptyState(
-      hasProducts ? 'Tidak ada yang cocok' : 'Belum ada produk',
-      hasProducts ? 'Coba kata kunci lain.' : 'Tambahkan produk pertama agar pelanggan bisa mulai belanja.'
-    )}</td></tr>`;
+    return `<tr><td colspan="5">${hasProducts
+      ? emptyState('Tidak ada produk yang cocok', 'Ubah kata kunci atau lepas filter yang aktif.', productResetHtml())
+      : emptyState('Belum ada produk', 'Tambahkan produk pertama agar pelanggan bisa mulai belanja.', productAddButton())}</td></tr>`;
   }
   return list.map(productRowHtml).join('');
 }
 
-const productsView = () => `
-  <div class="page-head"><div><h2>Produk</h2><p class="muted">Tambah, ubah harga dan stok, atau hapus produk.</p></div>
-    <div class="acts"><label class="search">${icon('search')}<input data-input="prod-search" placeholder="Cari produk atau kategori" maxlength="50" aria-label="Cari"></label>
-    <button class="btn primary" data-act="product-new">${icon('plus', 15)} Tambah produk</button></div></div>
+// Satu toolbar untuk semua cara menyaring: cari, kategori, status stok, dan jumlah hasil (sama polanya dengan halaman Log)
+function productToolsHtml() {
+  const { group, category } = state.productFilter;
+  const categories = [...new Set(state.products.map(product => product.category))].sort((a, b) => a.localeCompare(b, 'id'));
+  const chips = PRODUCT_GROUPS.map(item =>
+    `<button type="button" class="log-chip${item.id === 'out' ? ' is-alert' : ''}" data-act="prod-group" data-group="${item.id}" aria-pressed="${item.id === group}">${item.label}${item.id ? `<span class="log-chip-n">${productGroupCount(item.id)}</span>` : ''}</button>`
+  ).join('');
+  return `
+  <div class="log-tools prod-tools">
+    <div class="log-find">
+      <div class="log-search">
+        ${icon('search', 18)}
+        <input type="search" data-input="prod-search" value="${escapeHtml(state.query)}" placeholder="Cari nama produk atau kategori" aria-label="Cari produk" maxlength="50" autocomplete="off" spellcheck="false">
+        <button type="button" class="log-q-clear" data-act="prod-q-clear" aria-label="Hapus kata kunci"${state.query ? '' : ' hidden'}>${icon('x', 16)}</button>
+      </div>
+      <select class="select log-action" data-prod-category aria-label="Saring menurut kategori">
+        <option value="">Semua kategori</option>
+        ${categories.map(name => `<option value="${escapeHtml(name)}"${name === category ? ' selected' : ''}>${escapeHtml(name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="log-groups" role="group" aria-label="Status stok">${chips}</div>
+    <div class="log-status" id="prod-status" role="status" aria-live="polite">${productCountHtml(managedProducts().length)}</div>
+  </div>`;
+}
+
+const productsView = () => {
+  // kategori terpilih bisa hilang setelah produknya dihapus
+  const { category } = state.productFilter;
+  if (category && !state.products.some(product => product.category === category)) state.productFilter.category = '';
+  const hasProducts = state.products.length > 0;
+  return `
+  <div class="page-head"><div><h2>Produk</h2><p class="muted">Tambah produk, ubah harga dan stok, atau hapus dari katalog.</p></div>
+    ${productAddButton()}</div>
   ${truncationNotice()}
-  <div class="tbl-wrap${state.fresh ? ' stagger' : ''}"><table><thead><tr><th>Produk</th><th>Kategori</th><th>Harga</th><th>Stok</th><th class="right">Aksi</th></tr></thead><tbody id="prows">${productRows()}</tbody></table></div>`;
+  ${hasProducts ? productToolsHtml() : ''}
+  <div class="tbl-wrap prod-table${state.fresh ? ' stagger' : ''}" id="product-host">${hasProducts
+    ? `<table><thead><tr><th>Produk</th><th>Kategori</th><th class="right">Harga</th><th>Stok</th><th class="right">Aksi</th></tr></thead><tbody id="prows">${productRows()}</tbody></table>`
+    : emptyState('Belum ada produk', 'Tambahkan produk pertama agar pelanggan bisa mulai belanja.', productAddButton())}</div>`;
+};
+
+export const afterProductsRender = () => mountProductGrid(productRows);
 
 export function productModal(product) {
   const isEdit = Boolean(product);
@@ -955,7 +993,7 @@ export function productModal(product) {
   const categoryOptions = state.categories.map(c => `<option value="${escapeHtml(c)}">`).join('');
 
   openModal(`
-    <h3>${isEdit ? 'Ubah produk' : 'Tambah produk'}</h3><p class="sub">${isEdit ? 'Perubahan langsung tampil di katalog pelanggan.' : 'Produk baru langsung muncul di katalog.'}</p>
+    <h3>${isEdit ? 'Ubah produk' : 'Tambah produk'}</h3>${isEdit ? '<p class="sub">Perubahan langsung tampil di katalog pelanggan.</p>' : ''}
     <form data-form="product" data-id="${isEdit ? product.id : ''}" autocomplete="off" novalidate>
       <div class="form-alert" role="alert"></div>
       ${isEdit ? `<input type="hidden" name="base_stock" value="${escapeHtml(product.stock)}">` : ''}
@@ -970,7 +1008,7 @@ export function productModal(product) {
             <p class="muted small" data-photo-note>${PHOTO_HINT}</p>
           </div>
         </div></div>
-      <div class="field"><label>Nama produk</label><input class="input" name="name" required maxlength="80" autocomplete="off" placeholder="Contoh: Beras Premium 5 kg" value="${escapeHtml(values.name)}"></div>
+      <div class="field"><label>Nama produk</label><input class="input" name="name" required maxlength="80" autocomplete="off" value="${escapeHtml(values.name)}"></div>
       <div class="row2">
         <div class="field"><label>Kategori</label><input class="input" name="category" list="cats" required maxlength="30" placeholder="Contoh: Sembako" value="${escapeHtml(values.category)}"><datalist id="cats">${categoryOptions}</datalist></div>
         <div class="field"><label>Harga (Rp)</label><input class="input" name="price" type="number" placeholder="Contoh: 38000" min="100" max="100000000" step="1" required value="${escapeHtml(values.price)}"></div>

@@ -41,8 +41,10 @@ import {
 import { choosePhoto, clearPhoto, handlePhotoInput } from './photo.js';
 import './layout.js';   // tata letak kartu pesanan yang rapat (tanpa ruang kosong)
 import { applyLogFilter, visibleLogIds } from './logs-grid.js';
+import { applyProductFilter } from './products-grid.js';
 import {
   afterLogsRender,
+  afterProductsRender,
   afterShopRender,
   appendCards,
   cartLines,
@@ -54,7 +56,6 @@ import {
   orderRailHtml,
   passwordModal,
   productModal,
-  productRows,
   renderAuth,
   renderList,
   renderOtp,
@@ -130,6 +131,7 @@ async function show(view) {
   state.query = '';
   state.searchIds = null;
   state.logFilter = { q: '', group: '', action: '' };   // filter Log dimulai bersih tiap halaman dibuka
+  state.productFilter = { group: '', category: '' };
   state.fresh = true;
   renderShell();
   window.scrollTo(0, 0);
@@ -145,6 +147,7 @@ async function reload() {
     if (state.view === 'dashboard') animateDashboard(content);
     if (state.view === 'shop') afterShopRender();
     if (state.view === 'logs') afterLogsRender();
+    if (state.view === 'products') afterProductsRender();
     if (isCustomer()) drawCart();
     if (state.fresh) setTimeout(() => $$('#content .stagger').forEach(el => el.classList.remove('stagger')), 1200);
   } catch (err) {
@@ -448,6 +451,30 @@ function deleteProduct(el) {
   });
 }
 
+function setProductGroup(el) {
+  state.productFilter.group = el.dataset.group;
+  applyProductFilter();
+}
+
+function clearProductSearch() {
+  clearTimeout(searchDebounce);
+  state.query = '';
+  applyProductFilter();
+  $('[data-input="prod-search"]')?.focus();
+}
+
+function resetProductFilter() {
+  clearTimeout(searchDebounce);
+  state.query = '';
+  state.productFilter = { group: '', category: '' };
+  applyProductFilter();
+}
+
+function setProductCategory(select) {
+  state.productFilter.category = select.value;
+  applyProductFilter();
+}
+
 function deleteUser(el) {
   const user = state.users.find(u => u.id === el.dataset.id);
   return confirmAndDelete({
@@ -712,6 +739,9 @@ const actions = {
   'product-new': () => productModal(null),
   'product-edit': el => productModal(state.productMap[el.dataset.id]),
   'product-del': deleteProduct,
+  'prod-group': setProductGroup,
+  'prod-q-clear': clearProductSearch,
+  'prod-reset': resetProductFilter,
   'photo-pick': el => choosePhoto(el.closest('form')),
   'photo-clear': el => clearPhoto(el.closest('form')),
   'user-new': userModal,
@@ -1012,6 +1042,7 @@ function onClick(e) {
 
 async function onChange(e) {
   if (e.target.matches('[data-log-action]')) { setLogAction(e.target); return; }
+  if (e.target.matches('[data-prod-category]')) { setProductCategory(e.target); return; }
   if (e.target.matches('[data-photo-input]')) { await handlePhotoInput(e.target); return; }
 
   if (e.target.matches('[data-sort]')) {
@@ -1102,7 +1133,7 @@ function onInput(e) {
       keepResultsInView();
       searchOnServer(state.query);
     } else {
-      $('#prows').innerHTML = productRows();
+      applyProductFilter();
     }
   }, 200);
 }

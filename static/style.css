@@ -950,3 +950,43 @@ tr.log-alert td.pick{box-shadow:inset 3px 0 0 var(--err)}
   tr.log-alert td.pick{box-shadow:none}
   .btn.log-del{width:44px;min-height:44px}
 }
+
+/* ---------- Produk (admin/master) ---------- */
+.prod-info{min-width:0;flex:1}
+.prod-name{display:block;max-width:100%;padding:0;border:0;background:none;border-radius:4px;text-align:left;font:inherit;font-weight:700;color:var(--ink);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prod-name:hover{color:var(--blue-text);text-decoration:underline;text-underline-offset:3px}
+.prod-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prod-table:not(.grid-host) .prod-info{max-width:34ch}
+td.num-cell{text-align:right}
+.stock.low .num{color:var(--warn)}
+.stock.out .num{color:var(--err)}
+.prod-out .mini{opacity:.5;filter:grayscale(.85)}
+.prod-table .btn.sm{min-height:40px}
+.btn.prod-del{width:40px;padding:0;color:var(--muted)}
+.btn.prod-del:hover{color:var(--err);background:var(--err-bg);border-color:transparent;transform:none}
+.btn.prod-del:focus-visible{color:var(--err)}
+.prod-table .empty{padding:44px 20px}
+.prod-table>.empty,.prod-table td .empty{border:0;background:none;border-radius:0;width:100%}   /* kotak sudah punya bingkai sendiri: hindari bingkai ganda */
+
+@media(max-width:700px){
+  .prod-table td[data-label="Produk"]::before,
+  .prod-table td[data-label="Aksi"]::before{display:none}
+  .prod-table td[data-label="Produk"] .cell{width:100%}
+  .prod-table td[data-label="Aksi"]{justify-content:flex-end}
+  .prod-table:not(.grid-host) .prod-info{max-width:none}
+  .prod-name{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical}
+  .prod-desc{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical}
+  .btn.prod-del{width:44px;min-height:44px}
+}
+
+/* Produk di layar kecil: toolbar dipadatkan (pilih kategori + jumlah hasil satu baris), bar stok tetap terlihat di kartu */
+@media(max-width:700px){
+  .prod-tools{gap:8px;padding:10px}
+  .prod-tools .log-find{display:contents}
+  .prod-tools .log-search{flex:1 1 100%}
+  .prod-tools .log-action{flex:1 1 0;min-width:0;order:1}
+  .prod-tools .log-status{order:2;flex:none;width:auto;min-height:0;margin-left:auto}
+  .prod-tools .log-groups{order:3;flex:1 1 100%}
+  .prod-table td[data-label="Stok"] .stock{min-width:150px;margin-top:0}
+}
+@media(hover:none){.prod-table tbody tr:hover{background:var(--surface)}}   /* sentuhan tidak meninggalkan kartu berlatar abu-abu */

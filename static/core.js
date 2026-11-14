@@ -185,7 +185,8 @@ export const state = {
   users: [],
   logs: [],
   selectedLogs: new Set(),  // id log yang dicentang untuk dihapus
-  logFilter: { q: '', group: '', action: '' }   // filter halaman Log: kata kunci, kelompok, kode aksi
+  logFilter: { q: '', group: '', action: '' },  // filter halaman Log: kata kunci, kelompok, kode aksi
+  productFilter: { group: '', category: '' }    // filter halaman Produk; kata kunci di state.query
 };
 
 export const isCustomer = () => state.user?.role === 'user';
@@ -306,6 +307,26 @@ export function stockInfo(product) {
   const percent = Math.min(100, Math.round(stock / STOCK_BAR_FULL * 100));
   const label = stock === 0 ? 'Habis' : stock <= LOW_STOCK_LIMIT ? `Tinggal ${stock}` : `Stok ${stock}`;
   return `<div class="stock ${cls}"><span class="num">${label}</span><i><b style="width:${percent}%"></b></i></div>`;
+}
+
+export const PRODUCT_GROUPS = [
+  { id: '',    label: 'Semua',        test: () => true },
+  { id: 'low', label: 'Stok menipis', test: product => product.stock > 0 && product.stock <= LOW_STOCK_LIMIT },
+  { id: 'out', label: 'Habis',        test: product => product.stock === 0 }
+];
+
+export const productGroupCount = id =>
+  state.products.filter((PRODUCT_GROUPS.find(item => item.id === id) || PRODUCT_GROUPS[0]).test).length;
+
+export function managedProducts() {
+  const query = state.query.trim().toLowerCase();
+  const { group, category } = state.productFilter;
+  const inGroup = (PRODUCT_GROUPS.find(item => item.id === group) || PRODUCT_GROUPS[0]).test;
+  return state.products.filter(product =>
+    inGroup(product) &&
+    (!category || product.category === category) &&
+    (!query || product.name.toLowerCase().includes(query) || product.category.toLowerCase().includes(query))
+  );
 }
 
 // Versi ringkas untuk kartu: angka stok biasa saja, hanya yang menipis atau habis diberi tanda

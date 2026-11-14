@@ -68,3 +68,31 @@
 
 /* Kursor tangan pada kepala kolom yang bisa diurutkan */
 .grid-host .webix_ss_header .webix_hcell.tb-sortable{cursor:pointer}
+
+/* Tabel Produk: sel Produk berisi foto kecil + nama + deskripsi, dipotong dengan "..." bila kepanjangan */
+.grid-host .webix_cell .cell{flex:1;min-width:0}
+.grid-host .webix_cell .cell>div{min-width:0}
+.grid-host .webix_cell .cell b,
+.grid-host .webix_cell .cell .muted{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grid-host .webix_cell .stock{flex:1;margin-top:0}
+.grid-host .webix_cell.tb-actions{justify-content:flex-end}
+.grid-host .webix_cell .acts{flex-wrap:nowrap}
+.grid-host .webix_ss_header .webix_hcell.tb-right{text-align:right}
+/* Webix menghapus border semua <button> (.webix_view button{border-width:0}); dikembalikan untuk .btn */
+.grid-host .webix_cell .btn{border-width:1.5px}
+
+/* Produk: nama bisa diklik (membuka form ubah), harga rata kanan, tombol hapus tenang sampai disorot */
+.grid-host .webix_cell .prod-info{flex:1;min-width:0}
+.grid-host .webix_cell .prod-name,
+.grid-host .webix_cell .prod-desc{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grid-host .webix_cell .prod-name{font-size:1rem;line-height:1.35;font-weight:700}
+/* Webix 11.4 memasang css kolom pada .webix_column, bukan pada sel: jadi selektornya ".kelas-kolom .webix_cell" */
+.grid-host .tb-endalign .webix_cell{justify-content:flex-end;padding-right:22px}
+.grid-host .tb-actions .webix_cell{justify-content:flex-end}
+.grid-host .webix_ss_header .webix_hcell.tb-numhead{padding-right:22px}
+.grid-host .webix_cell .prod-del{opacity:.55;transition:opacity .15s,background .15s,color .15s}
+.grid-host .webix_cell.tb-hover .prod-del,
+.grid-host .webix_cell .prod-del:focus-visible{opacity:1}
+@media(hover:none){.grid-host .webix_cell .prod-del{opacity:1}}
+/* Tombol di pesan "tidak ada yang cocok" (bukan di dalam sel): Webix juga menghapus border-nya */
+.grid-host .webix_overlay .btn{border-width:1.5px}
