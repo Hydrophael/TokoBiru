@@ -105,7 +105,9 @@ export function confirmDialog(title, message, okLabel, danger = false) {
 }
 
 // --- Gerak dan animasi ---
-export const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+// Mengikuti pengaturan perangkat, atau pilihan "Kurangi animasi" di menu Pengaturan (kelas .calm di <html>)
+const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+export const reducedMotion = { get matches() { return motionQuery.matches || document.documentElement.classList.contains('calm'); } };
 
 // Angka berjalan dari nilai lama ke nilai baru (mis. total keranjang)
 const tweens = new WeakMap();
@@ -164,7 +166,7 @@ export function flyToCart(from) {
     );
   };
 
-  if (navigator.vibrate) navigator.vibrate(8);
+  if (navigator.vibrate && !document.documentElement.classList.contains('no-haptic')) navigator.vibrate(8);
 }
 
 export function animateDashboard(root) {

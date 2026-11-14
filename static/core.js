@@ -4,6 +4,18 @@
 
 export const ROLE_LABEL = { user: 'Pelanggan', admin: 'Admin', master: 'Master' };
 
+// Buku alamat: batas dan label harus sama dengan app.py (ADDRESS_LIMIT, ADDRESS_LABELS)
+export const ADDRESS_LIMIT = 5;
+export const ADDRESS_LABELS = ['Rumah', 'Kantor', 'Kos', 'Lainnya'];
+
+// Informasi untuk "Tentang aplikasi". Naikkan versi tiap rilis.
+export const APP_INFO = {
+  name: 'TokoBiru',
+  version: '1.1.0',
+  tagline: 'Belanja kebutuhan harian, pantau pesanan, kelola toko.',
+  stack: 'Flask, MongoDB, JavaScript'
+};
+
 // status: [label, warna tag]
 export const STATUS = {
   pending:   ['Menunggu bayar', 'warn'],
@@ -21,6 +33,7 @@ const ACTION_LABEL = {
   produk_tambah: 'Produk Ditambah', produk_ubah: 'Produk Diubah', produk_hapus: 'Produk Dihapus',
   pesanan_buat: 'Pesanan Dibuat', pesanan_status: 'Status Pesanan Berubah', pesanan_kedaluwarsa: 'Pesanan Kedaluwarsa',
   user_buat: 'Pengguna Dibuat', user_ubah: 'Pengguna Diubah', user_hapus: 'Pengguna Dihapus',
+  profil_ubah: 'Profil Diubah', alamat_ubah: 'Alamat Diubah',
   akses_ditolak: 'Akses Ditolak'
 };
 
@@ -60,7 +73,7 @@ export function logTone(action) {
 export const LOG_GROUPS = [
   { id: '',        label: 'Semua',            test: () => true },
   { id: 'alert',   label: 'Perlu dicek',      test: action => /gagal|ditolak/.test(action) },
-  { id: 'auth',    label: 'Login & password', test: action => /^(register|login|logout|password_|reset_)/.test(action) },
+  { id: 'auth',    label: 'Login & password', test: action => /^(register|login|logout|password_|reset_|profil_|alamat_)/.test(action) },
   { id: 'order',   label: 'Pesanan',          test: action => action.startsWith('pesanan_') },
   { id: 'product', label: 'Produk',           test: action => action.startsWith('produk_') },
   { id: 'user',    label: 'Pengguna',         test: action => action.startsWith('user_') }
@@ -92,10 +105,11 @@ export const NAV = [
 ];
 
 export const STORAGE_KEYS = {
-  profile: userId => 'tb_profile_' + userId,   // per pengguna: perangkat bersama tidak membocorkan HP/alamat
+  profile: userId => 'tb_profile_' + userId,   // data lama (HP/alamat di perangkat): dipindah ke akun sekali lalu dihapus
   legacyProfile: 'tb_profile',                 // kunci lama tanpa ID pengguna, dibuang saat aplikasi dimuat
   cart: userId => 'tb_cart_' + userId,
-  layout: 'tb_shop_layout'                     // pilihan tampilan katalog (kartu / daftar), per perangkat
+  layout: 'tb_shop_layout',                    // pilihan tampilan katalog (kartu / daftar), per perangkat
+  settings: 'tb_settings'                      // ukuran teks, animasi, getar (per perangkat)
 };
 
 export const MAX_CART_QTY = 99;
@@ -143,7 +157,13 @@ const ICONS = {
   users:   '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   list:    '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3" cy="6" r="1"/><circle cx="3" cy="12" r="1"/><circle cx="3" cy="18" r="1"/>',
   check:   '<polyline points="20 6 9 17 4 12"/>',
-  key:     '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>'
+  key:     '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
+  user:    '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  chevron: '<polyline points="6 9 12 15 18 9"/>',
+  gear:    '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  pin:     '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
+  download:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  info:    '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>'
 };
 
 // style opsional dipakai di halaman masuk (teks brand di atas latar biru)
@@ -216,6 +236,9 @@ export function formatDate(iso) {
 
 export const getInitials = name =>
   (String(name).trim().split(/\s+/).slice(0, 2).map(word => word[0]).join('') || '?').toUpperCase();
+
+// Warna avatar (0-4) tetap untuk satu pengguna, dipilih dari username
+export const avatarTone = user => hashString(user?.username || user?.name || '') % 5;
 
 export const hashString = text => [...String(text)].reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) >>> 0, 7);
 
@@ -335,6 +358,13 @@ export function stockNote(product) {
   if (stock === 0) return '<span class="stock-note out">Habis</span>';
   if (stock <= LOW_STOCK_LIMIT) return `<span class="stock-note low">Tinggal ${stock}</span>`;
   return `<span class="stock-note">Stok ${stock}</span>`;
+}
+
+// Label di pojok foto kartu: hanya untuk stok yang menipis atau habis
+export function stockFlag(product) {
+  if (product.stock === 0) return '<span class="tile-flag out">Habis</span>';
+  if (product.stock <= LOW_STOCK_LIMIT) return `<span class="tile-flag low">Tinggal ${product.stock}</span>`;
+  return '';
 }
 
 export const payRow = (label, value, copyText, copyLabel = label) =>

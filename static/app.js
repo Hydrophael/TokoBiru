@@ -3,6 +3,7 @@
 import {
   $,
   $$,
+  ADDRESS_LIMIT,
   MAX_CART_QTY,
   NAV,
   STORAGE_KEYS,
@@ -40,9 +41,13 @@ import {
 } from './ui.js';
 import { choosePhoto, clearPhoto, handlePhotoInput } from './photo.js';
 import './layout.js';   // tata letak kartu pesanan yang rapat (tanpa ruang kosong)
+import { applySettings, installApp, loadSettings, setTextSize, setTheme, settingsModal, syncInstall, toggleSetting } from './settings.js';
 import { applyLogFilter, visibleLogIds } from './logs-grid.js';
 import { applyProductFilter } from './products-grid.js';
 import {
+  aboutModal,
+  addressFormModal,
+  addressesModal,
   afterLogsRender,
   afterProductsRender,
   afterShopRender,
@@ -55,6 +60,8 @@ import {
   orderCards,
   orderRailHtml,
   passwordModal,
+  profileModal,
+  refreshProfileMenu,
   productModal,
   renderAuth,
   renderList,
@@ -87,7 +94,30 @@ async function onAuthed(result) {
   state.csrf = result.csrf;
   state.user = result.user;
   state.cart = storage.get(STORAGE_KEYS.cart(result.user.id)) || {};
+  await migrateLocalAddress();
   await show(defaultView());
+}
+
+// Versi lama menyimpan HP dan alamat di perangkat (localStorage). Bila akun belum punya alamat, data itu dipindah
+// ke akun sekali, lalu dihapus dari perangkat. Gagal pun tidak masalah: data lama dibiarkan dan dicoba lagi nanti.
+async function migrateLocalAddress() {
+  if (!isCustomer()) return;
+  const key = STORAGE_KEYS.profile(state.user.id);
+  const old = storage.get(key);
+  if (!old) return;
+  if ((state.user.addresses || []).length) { storage.remove(key); return; }   // akun sudah punya alamat: data lama tidak dipakai
+
+  const phone = String(old.phone || '').replace(/[\s.-]/g, '');
+  const address = String(old.address || '').trim();
+  if (!/^\+?\d{8,15}$/.test(phone) || address.length < 5) { storage.remove(key); return; }   // data lama tidak lengkap
+  try {
+    const result = await api('/auth/addresses', {
+      method: 'POST',
+      body: { label: 'Rumah', recipient: state.user.name, phone, address, main: true }
+    });
+    state.user.addresses = result.addresses;
+    storage.remove(key);
+  } catch { /* dicoba lagi saat masuk berikutnya */ }
 }
 
 async function loadProducts() {
@@ -133,6 +163,7 @@ async function show(view) {
   state.logFilter = { q: '', group: '', action: '' };   // filter Log dimulai bersih tiap halaman dibuka
   state.productFilter = { group: '', category: '' };
   state.fresh = true;
+  applySettings();   // pilihan ukuran teks bergantung pada peran pengguna yang baru masuk
   renderShell();
   window.scrollTo(0, 0);
   await reload();
@@ -201,7 +232,28 @@ function closeCart() {
   cartReturnFocus = null;
 }
 
+// --- Menu profil (kanan atas) ---
+
+const profileMenuOpen = () => Boolean($('#app .pm-pop:not([hidden])'));
+
+function setProfileMenu(open, { focus = false } = {}) {
+  const root = $('#app .pm');
+  if (!root) return;
+  const button = $('.pm-btn', root);
+  $('.pm-pop', root).hidden = !open;
+  root.classList.toggle('open', open);
+  $('#app .top')?.classList.toggle('menu-open', open);   // di HP lembar menu harus di atas bilah menu bawah
+  button.setAttribute('aria-expanded', String(open));
+  if (open) { syncInstall(); $('[role=menuitem]:not([hidden])', root)?.focus(); }
+  else if (focus) button.focus();
+}
+
+// fokus dikembalikan ke tombol dulu, supaya modal yang terbuka sesudahnya mengembalikan fokus ke tombol itu
+function openProfile() { setProfileMenu(false, { focus: true }); profileModal(); }
+function openPassword() { setProfileMenu(false, { focus: true }); passwordModal(); }
+
 async function logout() {
+  setProfileMenu(false);
   try {
     const result = await api('/auth/logout', { method: 'POST', body: {} });
     state.csrf = result.csrf;
@@ -358,7 +410,9 @@ function openCheckout() {
 
   closeCart();
   const total = cartTotal(lines);
-  const profile = storage.get(STORAGE_KEYS.profile(state.user.id)) || {};
+  const addresses = state.user.addresses || [];
+  const picked = addresses.find(item => item.main) || addresses[0] || null;
+  const start = picked || { recipient: state.user.name, phone: '', address: '' };
   const summary = lines.map(({ product, qty }) =>
     `<li><span>${productEmoji(product)} ${escapeHtml(product.name)} <em>× ${qty}</em></span><b class="num">${formatRupiah(product.price * qty)}</b></li>`
   ).join('');
@@ -369,11 +423,51 @@ function openCheckout() {
   openModal(`<h3>Buat pesanan</h3><p class="sub">${lines.length} produk, total <b class="num">${formatRupiah(total)}</b></p>
       <ul class="sum">${summary}</ul>
       <form data-form="checkout" novalidate><div class="form-alert" role="alert"></div>
-        <div class="field"><label>Nomor HP / WhatsApp</label><input class="input" name="phone" type="tel" inputmode="tel" required maxlength="20" placeholder="Contoh: 081234567890" autocomplete="tel" value="${escapeHtml(profile.phone || '')}"></div>
-        <div class="field"><label>Alamat pengiriman</label><textarea class="input" name="address" required minlength="5" maxlength="160" placeholder="Nama jalan, nomor, kota" autocomplete="street-address">${escapeHtml(profile.address || '')}</textarea></div>
+        ${addressPickerHtml(addresses, picked)}
+        <div class="field"><label>Nama penerima</label><input class="input" name="recipient" required maxlength="50" autocomplete="name" value="${escapeHtml(start.recipient)}"></div>
+        <div class="field"><label>Nomor HP / WhatsApp</label><input class="input" name="phone" type="tel" inputmode="tel" required maxlength="20" placeholder="Contoh: 081234567890" autocomplete="tel" value="${escapeHtml(start.phone)}"></div>
+        <div class="field"><label>Alamat pengiriman</label><textarea class="input" name="address" required minlength="5" maxlength="160" placeholder="Nama jalan, nomor, kota" autocomplete="street-address">${escapeHtml(start.address)}</textarea></div>
+        ${saveAddressHtml(addresses)}
         <div class="field"><label>Catatan untuk penjual (opsional)</label><input class="input" name="note" maxlength="200"></div>
         ${payNote}
         <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Buat pesanan (${formatRupiah(total)})</button></div></form>`);
+}
+
+// Pilihan alamat tersimpan di form checkout. Memilihnya mengisi nama, HP, dan alamat di bawahnya (tetap bisa diubah).
+const shortText = (text, max = 42) => {
+  const flat = String(text).replace(/\s+/g, ' ').trim();
+  return flat.length > max ? flat.slice(0, max - 1) + '…' : flat;
+};
+
+function addressPickerHtml(addresses, picked) {
+  if (!addresses.length) return '';
+  const options = addresses.map(item =>
+    `<option value="${escapeHtml(item.id)}"${item === picked ? ' selected' : ''}>${escapeHtml(item.label)}${item.main ? ' (utama)' : ''}: ${escapeHtml(shortText(item.address))}</option>`).join('');
+  return `<div class="field"><label>Kirim ke</label><select class="select" data-addr-pick>${options}<option value="">Alamat lain…</option></select></div>`;
+}
+
+// Kotak "Simpan alamat": tampil dan tercentang untuk pelanggan yang belum punya alamat; bila sudah punya, hanya muncul
+// saat memilih "Alamat lain" (dan daftar belum penuh)
+function saveAddressHtml(addresses) {
+  const first = addresses.length === 0;
+  return `<label class="save-addr" data-save-addr${first ? '' : ' hidden'}><input type="checkbox" class="tick" name="save_address" value="1"${first ? ' checked' : ''}> Simpan alamat ini di akun saya</label>`;
+}
+
+function pickCheckoutAddress(select) {
+  const form = select.closest('form');
+  const item = (state.user.addresses || []).find(a => a.id === select.value);
+  const set = (name, value) => { const input = form.elements[name]; if (input) input.value = value; };
+  set('recipient', item ? item.recipient : state.user.name);
+  set('phone', item ? item.phone : '');
+  set('address', item ? item.address : '');
+
+  const save = $('[data-save-addr]', form);
+  if (save) {
+    const offer = !item && (state.user.addresses || []).length < ADDRESS_LIMIT;
+    save.hidden = !offer;
+    const box = $('input', save);
+    if (box && !offer) box.checked = false;
+  }
 }
 
 async function copyToClipboard(el) {
@@ -710,6 +804,39 @@ function updatePasswordChecks(form) {
 }
 
 // data-act -> handler(elemen, event)
+// --- Alamat saya ---
+
+async function setMainAddress(el) {
+  const item = (state.user.addresses || []).find(a => a.id === el.dataset.id);
+  if (!item) return;
+  try {
+    const result = await api('/auth/addresses/' + item.id, {
+      method: 'PUT',
+      body: { label: item.label, recipient: item.recipient, phone: item.phone, address: item.address, main: true }
+    });
+    state.user.addresses = result.addresses;
+    addressesModal();
+    toast('Alamat utama diganti', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function deleteAddress(el) {
+  const item = (state.user.addresses || []).find(a => a.id === el.dataset.id);
+  if (!item) return;
+  const ok = await confirmDialog(`Hapus alamat ${item.label}?`, 'Alamat ini dihapus dari akun Anda. Pesanan yang sudah dibuat tidak berubah.', 'Hapus', true);
+  if (!ok) { addressesModal(); return; }   // confirmDialog menutup daftar alamat; tampilkan lagi bila batal
+  try {
+    const result = await api('/auth/addresses/' + item.id, { method: 'DELETE', body: {} });
+    state.user.addresses = result.addresses;
+    toast('Alamat dihapus', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+  addressesModal();
+}
+
 const actions = {
   'auth-tab': el => renderAuth(el.dataset.tab),
   nav: el => show(el.dataset.view),
@@ -754,7 +881,21 @@ const actions = {
   'photo-pick': el => choosePhoto(el.closest('form')),
   'photo-clear': el => clearPhoto(el.closest('form')),
   'user-new': userModal,
-  'change-password': passwordModal,
+  'profile-menu': () => setProfileMenu(!profileMenuOpen()),
+  'profile-open': () => openProfile(),
+  'profile-close': () => setProfileMenu(false, { focus: true }),
+  'address-open': () => addressesModal(),
+  'address-new': () => addressFormModal(),
+  'address-edit': el => addressFormModal((state.user.addresses || []).find(item => item.id === el.dataset.id) || null),
+  'address-main': setMainAddress,
+  'address-del': deleteAddress,
+  'about-open': () => aboutModal(),
+  'settings-open': settingsModal,
+  'set-text': setTextSize,
+  'set-theme': setTheme,
+  'set-toggle': toggleSetting,
+  'install-app': installApp,
+  'change-password': openPassword,
   'forgot-open': () => forgotModal(loginEmailHint()),
   'forgot-resend': resendResetCode,
   'wiz-back': wizardBack,
@@ -893,6 +1034,43 @@ const formHandlers = {
     });
     closeModal();
     toast('Password diganti. Perangkat lain perlu masuk lagi.', 'ok');
+    if (state.view === 'logs') await reload();   // log "Password Diubah" langsung tampil
+  },
+
+  async profile(form, data) {
+    const name = String(data.name || '').trim();
+    if (name.length < 2) throw validationError({ name: 'Nama lengkap minimal 2 karakter' });
+
+    // Kolom foto (image) hanya ikut terkirim bila foto diganti (isinya foto baru) atau dihapus (kosong)
+    const body = { name };
+    if ('image' in data) body.image = data.image;
+
+    const result = await api('/auth/profile', { method: 'PATCH', body });
+    state.user = result.user;
+    refreshProfileMenu();
+    closeModal();
+    toast('Profil disimpan', 'ok');
+    if (state.view === 'users' || state.view === 'logs') await reload();   // foto/nama di daftar Pengguna dan log baru ikut tampil
+  },
+
+  async address(form, data) {
+    const id = form.dataset.id;
+    const recipient = String(data.recipient || '').trim();
+    const phone = String(data.phone || '').replace(/[\s.-]/g, '');
+    const address = String(data.address || '').trim();
+    const errors = {};
+    if (recipient.length < 2) errors.recipient = 'Nama penerima minimal 2 karakter';
+    if (!/^\+?\d{8,15}$/.test(phone)) errors.phone = 'Isi nomor HP yang benar, contoh 081234567890';
+    if (address.length < 5) errors.address = 'Alamat minimal 5 karakter';
+    if (Object.keys(errors).length) throw validationError(errors);
+
+    const result = await api(id ? '/auth/addresses/' + id : '/auth/addresses', {
+      method: id ? 'PUT' : 'POST',
+      body: { label: data.label, recipient, phone, address, main: data.main === '1' }
+    });
+    state.user.addresses = result.addresses;
+    toast(id ? 'Alamat diperbarui' : 'Alamat ditambahkan', 'ok');
+    addressesModal();
   },
 
   async forgot(form, data) {
@@ -985,8 +1163,9 @@ const formHandlers = {
       throw validationError({ phone: 'Isi nomor HP yang benar, contoh 081234567890' });
     }
 
-    const address = data.address.trim();
-    storage.set(STORAGE_KEYS.profile(state.user.id), { phone, address });
+    const recipient = String(data.recipient || '').trim();
+    if (recipient.length < 2) throw validationError({ recipient: 'Nama penerima minimal 2 karakter' });
+    const address = String(data.address || '').trim();
 
     // harga ikut dikirim: server menolak (409) bila harga di katalog sudah berubah dari yang dilihat pelanggan
     const items = cartLines().map(line => ({ product_id: line.product.id, qty: line.qty, price: line.product.price }));
@@ -994,7 +1173,7 @@ const formHandlers = {
     try {
       result = await api('/orders', {
         method: 'POST',
-        body: { items, phone, address, note: data.note },
+        body: { items, phone, address, recipient, note: data.note },
         headers: { 'Idempotency-Key': checkoutKey(items) }
       });
     } catch (err) {
@@ -1005,6 +1184,16 @@ const formHandlers = {
 
     state.checkout = null;
     state.cart = {};
+    // Alamat baru disimpan ke akun bila dicentang. Pesanan sudah jadi, jadi kegagalan di sini tidak boleh membatalkannya.
+    if (data.save_address === '1' && (state.user.addresses || []).length < ADDRESS_LIMIT) {
+      try {
+        const saved = await api('/auth/addresses', {
+          method: 'POST',
+          body: { label: 'Rumah', recipient, phone, address, main: !(state.user.addresses || []).length }
+        });
+        state.user.addresses = saved.addresses;
+      } catch { /* pesanan tetap berhasil; alamat bisa ditambah lewat menu akun */ }
+    }
     closeModal();
     await show('orders');
     showOrderSuccess(result.order);
@@ -1043,8 +1232,11 @@ async function onSubmit(e) {
 // === Event listener ===
 
 function onClick(e) {
+  if (profileMenuOpen() && !e.target.closest('.pm')) setProfileMenu(false);   // ketuk di luar menu menutupnya
   const el = e.target.closest('[data-act]');
   if (!el) return;
+  // memilih sesuatu di menu akun menutupnya; fokus kembali ke tombol akun supaya modal berikutnya kembali ke sana
+  if (el.closest('.pm-pop') && profileMenuOpen()) setProfileMenu(false, { focus: true });
   const handler = actions[el.dataset.act];
   if (handler) handler(el, e);
 }
@@ -1053,6 +1245,7 @@ async function onChange(e) {
   if (e.target.matches('[data-log-action]')) { setLogAction(e.target); return; }
   if (e.target.matches('[data-prod-category]')) { setProductCategory(e.target); return; }
   if (e.target.matches('[data-photo-input]')) { await handlePhotoInput(e.target); return; }
+  if (e.target.matches('[data-addr-pick]')) { pickCheckoutAddress(e.target); return; }
 
   if (e.target.matches('[data-sort]')) {
     state.sort = e.target.value;
@@ -1152,10 +1345,20 @@ function onModalKeydown(e) {
   const modalOpen = $('#modal-root').firstChild;
 
   if (e.key === 'Escape') {
+    if (profileMenuOpen()) { setProfileMenu(false, { focus: true }); return; }
     const active = document.activeElement;
     if (modalOpen) closeModal();
     else if (active?.matches?.('[data-input=shop-search]') && active.value) clearSearch();
     else closeCart();
+    return;
+  }
+
+  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && profileMenuOpen()) {
+    const items = $$('#app .pm-pop [role=menuitem]').filter(item => !item.hidden);
+    const at = items.indexOf(document.activeElement);
+    const next = e.key === 'ArrowDown' ? (at + 1) % items.length : (at <= 0 ? items.length - 1 : at - 1);
+    e.preventDefault();
+    items[next].focus();
     return;
   }
 
@@ -1265,6 +1468,7 @@ function bindEvents() {
   document.addEventListener('change', onChange);
   document.addEventListener('input', onInput);
   document.addEventListener('focusin', onOtpFocus);
+  document.addEventListener('focusin', e => { if (profileMenuOpen() && !e.target.closest('.pm')) setProfileMenu(false); });   // Tab keluar dari menu menutupnya
   document.addEventListener('focusout', onOtpFocus);
   document.addEventListener('pointerup', onOtpPointer);
   document.addEventListener('keydown', onModalKeydown);
@@ -1282,6 +1486,8 @@ function bindEvents() {
 async function boot() {
   storage.remove(STORAGE_KEYS.legacyProfile);   // buang profil lama yang bisa memuat data pengguna sebelumnya
   state.layout = storage.get(STORAGE_KEYS.layout) === 'rows' ? 'rows' : 'grid';
+  loadSettings();
+  applySettings();
   bindEvents();
 
   try {
@@ -1293,6 +1499,7 @@ async function boot() {
     if (me.user) {
       state.user = me.user;
       state.cart = storage.get(STORAGE_KEYS.cart(me.user.id)) || {};
+      await migrateLocalAddress();
       await show(defaultView());
     } else {
       renderAuth('login');

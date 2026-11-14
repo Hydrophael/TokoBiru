@@ -4,7 +4,7 @@
 // di field `image` saat produk disimpan. Server menyimpannya di master_product dan menyajikannya lewat
 // /api/products/<id>/image; daftar produk hanya membawa alamatnya (`photo`).
 
-import { $, createError } from './core.js';
+import { $, createError, getInitials, state } from './core.js';
 import { toast } from './ui.js';
 
 const MAX_INPUT_BYTES = 15 * 1024 * 1024;   // foto asli dari kamera HP bisa beberapa MB
@@ -14,6 +14,10 @@ const LIMIT_BYTES = 200 * 1024;             // di atas ini ditolak (server memba
 const QUALITIES = [0.85, 0.75, 0.65, 0.55];
 
 export const PHOTO_HINT = 'JPG, PNG, atau WebP. Foto dikecilkan otomatis.';
+export const AVATAR_HINT = 'JPG, PNG, atau WebP. Foto dipotong persegi dan dikecilkan otomatis.';
+
+// Foto profil: persegi (dipotong dari tengah), lebih kecil dari foto produk
+const AVATAR = { side: 320, target: 40 * 1024, limit: 120 * 1024, square: true };
 
 const dataUrlBytes = dataUrl => Math.round((dataUrl.length - dataUrl.indexOf(',') - 1) * 3 / 4);
 
@@ -43,30 +47,37 @@ async function decodeImage(file) {
   }
 }
 
-function encode(source, side) {
+function encode(source, side, target, square) {
   const width = source.naturalWidth || source.width;
   const height = source.naturalHeight || source.height;
-  const scale = Math.min(1, side / Math.max(width, height));
+
+  // square: ambil kotak di tengah gambar (sisi terpendek), lalu kecilkan ke `side`
+  const crop = square
+    ? { x: Math.round((width - Math.min(width, height)) / 2), y: Math.round((height - Math.min(width, height)) / 2), w: Math.min(width, height), h: Math.min(width, height) }
+    : { x: 0, y: 0, w: width, h: height };
+  const scale = Math.min(1, side / Math.max(crop.w, crop.h));
 
   const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(width * scale));
-  canvas.height = Math.max(1, Math.round(height * scale));
+  canvas.width = Math.max(1, Math.round(crop.w * scale));
+  canvas.height = Math.max(1, Math.round(crop.h * scale));
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#fff';                       // PNG transparan jadi berlatar putih
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  ctx.drawImage(source, crop.x, crop.y, crop.w, crop.h, 0, 0, canvas.width, canvas.height);
 
   const type = canEncodeWebp() ? 'image/webp' : 'image/jpeg';
   let out = '';
   for (const quality of QUALITIES) {
     out = canvas.toDataURL(type, quality);
-    if (dataUrlBytes(out) <= TARGET_BYTES) break;
+    if (dataUrlBytes(out) <= target) break;
   }
   return out;
 }
 
 // File gambar -> data URL kecil. Melempar error berpesan bahasa Indonesia bila gagal.
-export async function compressImage(file) {
+// options (opsional): { side, target, limit, square }; bawaannya untuk foto produk.
+export async function compressImage(file, options = {}) {
+  const { side: startSide = MAX_SIDE, target = TARGET_BYTES, limit = LIMIT_BYTES, square = false } = options;
   if (!file.type.startsWith('image/')) throw createError('File harus berupa gambar (JPG, PNG, atau WebP)');
   if (file.size > MAX_INPUT_BYTES) throw createError('Foto terlalu besar (maksimal 15 MB)');
 
@@ -74,15 +85,15 @@ export async function compressImage(file) {
   try { source = await decodeImage(file); } catch { throw createError('Foto tidak bisa dibaca. Coba format JPG, PNG, atau WebP.'); }
 
   let out = '';
-  let side = MAX_SIDE;
+  let side = startSide;
   for (let attempt = 0; attempt < 3; attempt++) {
-    out = encode(source, side);
-    if (dataUrlBytes(out) <= TARGET_BYTES) break;
+    out = encode(source, side, target, square);
+    if (dataUrlBytes(out) <= target) break;
     side = Math.round(side * 0.8);
   }
   if (source.close) source.close();
 
-  if (dataUrlBytes(out) > LIMIT_BYTES) throw createError('Foto terlalu rumit untuk dikecilkan. Coba foto lain.');
+  if (dataUrlBytes(out) > limit) throw createError('Foto terlalu rumit untuk dikecilkan. Coba foto lain.');
   return out;
 }
 
@@ -92,6 +103,17 @@ export const photoPreviewHtml = image =>
   image
     ? `<img src="${image}" alt="Pratinjau foto produk">`
     : '<span aria-hidden="true">📷</span>';
+
+// Foto profil: bila kosong, tampil inisial pengguna (sama seperti avatar di menu akun)
+export const avatarPreviewHtml = image =>
+  image
+    ? `<img src="${image}" alt="Pratinjau foto profil">`
+    : `<span class="av-initials" aria-hidden="true">${getInitials(state.user?.name || '')}</span>`;
+
+// Jenis foto ditentukan oleh atribut data-photo-kind di input file: "avatar" untuk foto profil, selain itu foto produk
+const kindOf = form => ($('input[data-photo-input]', form)?.dataset.photoKind === 'avatar' ? 'avatar' : 'product');
+const previewFor = (form, image) => (kindOf(form) === 'avatar' ? avatarPreviewHtml(image) : photoPreviewHtml(image));
+const hintFor = form => (kindOf(form) === 'avatar' ? AVATAR_HINT : PHOTO_HINT);
 
 // Field `image` ikut terkirim hanya bila foto diubah: berisi foto baru, atau kosong untuk menghapus foto.
 // Selama belum disentuh, field itu nonaktif (tidak masuk FormData), jadi foto lama tidak berubah.
@@ -112,8 +134,8 @@ function writeState(form, state) {
   $('[data-photo-note]', form).textContent = state.note;
 }
 
-const applyPhoto = (form, image, note = PHOTO_HINT) =>
-  writeState(form, { value: image, disabled: false, preview: photoPreviewHtml(image), clearHidden: !image, note });
+const applyPhoto = (form, image, note = hintFor(form)) =>
+  writeState(form, { value: image, disabled: false, preview: previewFor(form, image), clearHidden: !image, note });
 
 export function clearPhoto(form) {
   if (form) applyPhoto(form, '');
@@ -136,7 +158,7 @@ export async function handlePhotoInput(input) {
   $('[data-photo-note]', form).textContent = 'Memproses foto…';
 
   try {
-    const image = await compressImage(file);
+    const image = await compressImage(file, kindOf(form) === 'avatar' ? AVATAR : {});
     if (form.isConnected) applyPhoto(form, image, `Foto siap, ${Math.round(dataUrlBytes(image) / 1024)} KB`);
   } catch (err) {
     if (form.isConnected) writeState(form, before);   // kembali ke keadaan sebelumnya

@@ -1,5 +1,6 @@
-/* TokoBiru - tema minimarket (terang saja): biru toko untuk aksi dan papan merek, kuning label harga sebagai satu-satunya aksen hangat, putih rak untuk permukaan.
-   Tidak mengikuti mode gelap perangkat. Teks >= 4.5:1, batas input / fokus / indikator >= 3:1. */
+/* TokoBiru - tema minimarket: biru toko untuk aksi dan papan merek, kuning label harga sebagai satu-satunya aksen hangat, putih rak untuk permukaan.
+   Terang adalah bawaan. Tema gelap dipasang lewat html[data-theme="dark"] (diatur theme.js dari menu Pengaturan: Terang / Gelap / Otomatis).
+   Teks >= 4.5:1, batas input / fokus / indikator >= 3:1 di kedua tema. */
 :root{
   color-scheme:light;
   --bg:#f4f7fc; --bg-soft:#e8eff9; --surface:#fff;
@@ -21,6 +22,28 @@
   --body:'Instrument Sans','Segoe UI',system-ui,sans-serif;
   --ease:cubic-bezier(.2,.8,.2,1);
 }
+/* ---------- Tema gelap: hanya mengganti variabel warna; aturan lain memakai variabel yang sama ---------- */
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0a1422; --bg-soft:#16283f; --surface:#112036;
+  --ink:#e9eff8; --ink2:#b9c8dc; --muted:#9db0c7;
+  --line:#243a58; --line-strong:#38557f; --field:#7390b3; --track:#223a5c; --track-edge:#7390b3; --bar:#4d9df0; --amber-bar:#f0b429;
+  --blue:#2a74d4; --blue-d:#1f61b8; --on-blue:#fff; --blue-text:#8bbcf7; --blue-soft:#17304f; --blue-ring:rgba(120,175,245,.35); --blue-l:#2f5385; --focus:#8bbcf7;
+  --navy:#1b3d70; --hero-a:#0a2a5e; --hero-b:#0d4a9a; --hero-ink:#fff; --hero-glow:rgba(255,255,255,.12); --hero-line:rgba(255,255,255,.24);
+  --mark-a:#5aa7f0; --mark-b:#0b5fc4; --toast-act:#ffd451;
+  --accent:#ffc61a; --on-accent:#0c2342; --thumb-on:#fff;
+  --ok:#6fd9ae; --ok-bg:#0f2f27; --ok-line:#1f6a52; --ok-solid:#0f7a5a;
+  --warn:#f2c35b; --warn-bg:#33270a; --warn-line:#6b5217;
+  --err:#ff8f99; --err-bg:#3a1319; --err-line:#7a2a34; --err-solid:#c9303f; --err-solid-d:#a82532;
+  --t0a:#17304f; --t0b:#102440; --t1a:#3b2f0e; --t1b:#2a2209; --t2a:#3d1c1c; --t2b:#2b1414; --t3a:#0f3a40; --t3b:#0b2a2f;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.3);
+  --shadow-lg:0 2px 4px rgba(0,0,0,.4),0 14px 34px rgba(0,0,0,.5);
+  --scrim:rgba(0,0,0,.65);
+}
+:root[data-theme="dark"] .pt-dots i{background:rgba(255,255,255,.3)}
+:root[data-theme="dark"] .toast{border:1px solid var(--line-strong)}
+:root[data-theme="dark"] .fly.photo{border-color:var(--surface)}
+:root[data-theme="dark"] img.photo,:root[data-theme="dark"] .mini img{background:#fff}   /* foto produk berlatar putih tetap rapi */
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth;-webkit-text-size-adjust:100%;scrollbar-gutter:stable}   /* ruang scrollbar selalu disediakan, jadi halaman tidak bergeser saat modal mengunci scroll */
 body{font-family:var(--body);font-size:1.0625rem;color:var(--ink);background:var(--bg);line-height:1.55;min-height:100vh;-webkit-font-smoothing:antialiased;
@@ -468,11 +491,11 @@ html.lock{overflow:hidden}
 .pay-row .btn{grid-area:btn}
 .pay-row.static{grid-template-columns:minmax(0,1fr);grid-template-areas:"label" "value"}
 .pay-row.static b{color:var(--warn)}
-.r-pay .btn.sm{background:#fff;min-height:34px;padding:0 12px}
+.r-pay .btn.sm{background:var(--surface);min-height:34px;padding:0 12px}
 .r-pay-hint{margin-top:4px;padding-top:8px;border-top:1px dashed var(--warn-line);font-size:.82rem;line-height:1.4;color:var(--ink2)}
 
 /* ---- Layar masuk ---- */
-.auth-card .input::placeholder{color:#5b7391}
+.auth-card .input::placeholder{color:var(--muted)}
 
 /* ---- Ticker dan label harga di layar masuk ---- */
 .ticker{padding:0;-webkit-mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent);mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent)}
@@ -1028,3 +1051,173 @@ td.num-cell{text-align:right}
   .prod-table td[data-label="Stok"] .stock{min-width:150px;margin-top:0}
 }
 @media(hover:none){.prod-table tbody tr:hover{background:var(--surface)}}   /* sentuhan tidak meninggalkan kartu berlatar abu-abu */
+/* ---------- Menu profil (kanan atas) ---------- */
+.pm-section{display:flex;flex-direction:column;gap:2px;margin:6px 0 14px;padding-top:16px;border-top:1px solid var(--line)}
+.input:disabled{background:var(--bg);color:var(--ink2);cursor:not-allowed}
+
+/* ======================= Akun, profil, dan pengaturan ======================= */
+
+/* Avatar: warna tetap per pengguna, dipilih dari username */
+.av{display:grid;place-items:center;flex:none;width:38px;height:38px;border-radius:50%;font-family:var(--display);font-weight:800;font-size:1rem;line-height:1;color:#fff;box-shadow:0 0 0 2px var(--surface),0 0 0 3.5px var(--line-strong)}
+.av.lg{width:52px;height:52px;font-size:1.25rem}
+.av.xl{width:64px;height:64px;font-size:1.5rem}
+.av.tone0{background:linear-gradient(135deg,#1a6fd0,#0a4ea3)}
+.av.tone1{background:linear-gradient(135deg,#0d8a6a,#07674c)}
+.av.tone2{background:linear-gradient(135deg,#5b5fd6,#3f3fa8)}
+.av.tone3{background:linear-gradient(135deg,#d2473a,#a32a1f)}
+.av.tone4{background:linear-gradient(135deg,#ffd451,#ffc61a);color:var(--on-accent)}
+
+/* Tombol akun di header */
+.pm{position:relative}
+.pm-btn{display:inline-flex;align-items:center;gap:10px;min-height:48px;padding:4px 12px 4px 5px;background:var(--surface);border:1.5px solid var(--line-strong);border-radius:999px;cursor:pointer;color:var(--ink);font:inherit;text-align:left;transition:background .15s,border-color .15s}
+.pm-btn:hover,.pm-btn[aria-expanded=true]{background:var(--blue-soft);border-color:var(--blue)}
+.pm-btn .av{box-shadow:none}
+.pm-btn .ic{color:var(--ink2);transition:transform .2s var(--ease)}
+.pm-btn[aria-expanded=true] .ic{transform:rotate(180deg)}
+.pm-who{display:flex;flex-direction:column;line-height:1.15;min-width:0}
+.pm-who small{font-size:.78rem;color:var(--muted);font-weight:500}
+.pm-who b{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.95rem}
+@media(max-width:1100px){.pm-who{display:none}.pm-btn{padding:4px 8px 4px 4px;gap:6px}}
+@media(max-width:430px){.pm-btn{padding:3px}.pm-btn .ic{display:none}}
+
+/* Total belanja di tombol keranjang */
+.cart-sum{font-weight:700;font-size:.95rem;color:var(--blue-text)}
+@media(max-width:1100px){.cart-sum{display:none}}
+
+/* Menu akun: kartu di desktop, lembar dari bawah di HP. Garis kuning-putih di atas meniru kanopi toko. */
+.pm-scrim{display:none}
+.pm-pop{position:absolute;right:0;top:calc(100% + 10px);z-index:50;width:min(340px,calc(100vw - 24px));background:var(--surface);border:1px solid var(--line-strong);border-radius:20px;box-shadow:var(--shadow-lg);overflow:hidden;transform-origin:top right;animation:pop .18s var(--ease)}
+.pm-pop[hidden]{display:none}
+.pm-pop::before{content:"";display:block;height:8px;background:repeating-linear-gradient(90deg,var(--accent) 0 16px,#fff 16px 32px)}
+.pm-head{display:flex;align-items:center;gap:14px;padding:16px 18px 14px;background:linear-gradient(180deg,var(--blue-soft),var(--surface))}
+.pm-id{display:flex;flex-direction:column;align-items:flex-start;gap:1px;min-width:0;line-height:1.3}
+.pm-id b{font-family:var(--display);font-size:1.12rem;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pm-mail{color:var(--muted);font-size:.9rem;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pm-id .tag{margin-top:6px}
+.pm-quick{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:4px 14px 14px}
+.pm-q{display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 4px 9px;background:var(--surface);border:1px solid var(--line);border-radius:14px;font-size:.88rem;font-weight:600;color:var(--ink);cursor:pointer;transition:border-color .15s,background .15s,transform .15s var(--ease)}
+.pm-qi{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:var(--blue-soft);color:var(--blue-text)}
+.pm-q:hover{border-color:var(--blue);background:var(--blue-soft)}
+.pm-q:active{transform:scale(.96)}
+.pm-list{padding:6px 8px 8px;border-top:1px solid var(--line)}
+.pm-sep{height:1px;margin:6px 8px;background:var(--line)}
+.pm-item{display:flex;align-items:center;gap:14px;width:100%;min-height:54px;padding:6px 12px;border:0;border-radius:12px;background:transparent;color:var(--ink);cursor:pointer;text-align:left;transition:background .15s,color .15s}
+.pm-item[hidden],.pm-q[hidden]{display:none}
+.pm-item .ic{color:var(--ink2)}
+.pm-t{display:flex;flex-direction:column;min-width:0;line-height:1.3}
+.pm-t b{font-weight:600}
+.pm-t small{color:var(--muted);font-size:.84rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pm-item:hover,.pm-item:focus-visible{background:var(--blue-soft);color:var(--blue-text)}
+.pm-item:hover .ic,.pm-item:focus-visible .ic{color:var(--blue-text)}
+.pm-item.danger,.pm-item.danger .ic{color:var(--err)}
+.pm-item.danger:hover,.pm-item.danger:focus-visible{background:var(--err-bg);color:var(--err)}
+.pm-btn:focus-visible,.pm-item:focus-visible,.pm-q:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+.top.menu-open{z-index:58}   /* lembar menu di HP harus di atas bilah menu bawah */
+@media(max-width:600px){
+  .pm.open .pm-scrim{display:block;position:fixed;inset:0;z-index:49;background:var(--scrim);animation:fade .2s}
+  .pm-pop{position:fixed;left:0;right:0;bottom:0;top:auto;width:auto;max-height:88vh;overflow:auto;border:0;border-radius:22px 22px 0 0;padding-bottom:env(safe-area-inset-bottom);transform-origin:bottom center;animation:sheet .3s var(--ease)}
+}
+
+/* Modal Profil */
+.pf-head{display:flex;align-items:center;gap:14px;margin:2px 0 18px;padding:14px 16px;background:var(--bg);border:1px solid var(--line);border-radius:var(--r)}
+.pf-id{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0;line-height:1.3}
+.pf-id b{font-family:var(--display);font-size:1.2rem;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Modal Pengaturan */
+.set-group{border:1px solid var(--line);border-radius:var(--r);margin-bottom:16px;overflow:hidden}
+.set-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.set-row:last-child{border-bottom:0}
+.set-t{min-width:0}
+.set-t b{display:block;font-weight:600}
+.set-t small{display:block;color:var(--muted);font-size:.88rem;line-height:1.35;margin-top:2px}
+.choice{display:inline-flex;flex:none;gap:2px;padding:3px;background:var(--bg-soft);border-radius:12px}
+.choice button{border:0;background:transparent;min-height:40px;padding:0 14px;border-radius:9px;font-weight:600;color:var(--ink2);cursor:pointer;white-space:nowrap;transition:background .15s,color .15s}
+.choice button:hover{color:var(--ink)}
+.choice button[aria-pressed=true]{background:var(--blue);color:var(--on-blue);box-shadow:0 2px 6px rgba(11,95,196,.3)}
+.tgl{position:relative;flex:none;width:52px;height:32px;border:0;border-radius:999px;background:var(--track-edge);cursor:pointer;transition:background .2s}
+.tgl i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(12,35,66,.3);transition:transform .2s var(--ease)}
+.tgl[aria-checked=true]{background:var(--blue)}
+.tgl[aria-checked=true] i{transform:translateX(20px)}
+@media(max-width:480px){
+  .set-row.stack{flex-direction:column;align-items:stretch;gap:10px}
+  .set-row.stack .choice{display:grid;grid-auto-flow:column;grid-auto-columns:1fr}
+}
+
+/* Ukuran teks dan "Kurangi animasi" (dipasang di <html> oleh settings.js) */
+html[data-text=lg]{font-size:112.5%}
+html[data-text=xl]{font-size:125%}
+html.calm *,html.calm *::before,html.calm *::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+
+/* Aturan lama untuk tombol Keluar di header (menyembunyikan tulisan di layar kecil) tidak boleh mengenai item menu akun */
+.pm-pop .pm-item{padding:6px 12px}
+.pm-pop .pm-item[data-act=logout] .pm-t{display:flex}
+.set-row.wide{flex-direction:column;align-items:stretch;gap:10px}
+.set-row.wide .choice{display:grid;grid-auto-flow:column;grid-auto-columns:1fr}
+
+/* ======================= Halaman Belanja ======================= */
+.welcome{position:relative;display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;padding:26px 28px 20px;border-radius:20px;color:var(--hero-ink);overflow:hidden;box-shadow:var(--shadow);
+  background:radial-gradient(520px 220px at 100% 0,var(--hero-glow),transparent 70%),linear-gradient(120deg,var(--hero-a),var(--hero-b))}
+.welcome::before{content:"";position:absolute;left:0;right:0;top:0;height:8px;background:repeating-linear-gradient(90deg,var(--accent) 0 20px,#fff 20px 40px)}
+.welcome h2{font-size:1.9rem;color:#fff}
+.welcome p{margin-top:4px;max-width:46ch;color:rgba(255,255,255,.9);font-size:1rem}
+.w-side{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.w-facts{display:flex;gap:10px}
+.w-fact{padding:8px 16px;border-radius:12px;background:rgba(255,255,255,.14);border:1px solid var(--hero-line);font-size:.9rem;line-height:1.25}
+.w-fact b{display:block;font-family:var(--display);font-size:1.3rem}
+.btn.yellow{background:var(--accent);border-color:var(--accent);color:var(--on-accent);box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.btn.yellow:hover{background:#ffd451;border-color:#ffd451}
+.btn.yellow[hidden]{display:none}
+@media(max-width:600px){
+  .welcome{padding:22px 18px 16px;border-radius:16px}
+  .welcome h2{font-size:1.45rem} .welcome p{font-size:.95rem}
+  .welcome p,.w-side{display:none}   /* HP: keranjang sudah ada di bilah bawah, katalog dibiarkan naik */
+  .welcome{padding-bottom:14px}
+}
+
+/* Label stok di pojok foto: sama dengan catatan stok di bawahnya, tapi terlihat sekilas saat menggulir */
+.tile-flag{position:absolute;right:12px;top:10px;z-index:1;padding:3px 11px;border-radius:999px;font-size:.82rem;font-weight:700;box-shadow:0 1px 4px rgba(12,35,66,.22)}
+.tile-flag.low{background:var(--accent);color:var(--on-accent)}
+.tile-flag.out{background:var(--err-solid);color:#fff}
+.label.soldout .tile{opacity:1;filter:none}
+.label.soldout .tile .ini,.label.soldout .tile .photo{opacity:.5;filter:grayscale(.8)}
+.shelf.rows .tile-flag{display:none}
+@media(max-width:600px){.tile-flag{display:none}}
+.drawer-head h3 small{font-family:var(--body);font-weight:500;font-size:.95rem;margin-left:6px}
+
+/* ---------- Foto profil, alamat, dan Tentang aplikasi ---------- */
+.av.has-photo{background:var(--bg-soft);overflow:hidden}
+.av img{width:100%;height:100%;object-fit:cover;display:block}
+.photo-preview.round{border-radius:50%;border-style:solid}
+.photo-preview .av-initials{font-family:var(--display);font-weight:800;font-size:1.9rem;color:var(--blue-text)}
+.pf-photo{margin:0 0 6px}
+
+.pf-addr{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 14px;background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);margin:0 0 16px}
+.pf-addr .set-t{min-width:0}
+.pf-addr small{display:block;color:var(--muted);font-size:.88rem;line-height:1.35;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.addr-list{list-style:none;display:flex;flex-direction:column;gap:10px;margin:0 0 16px;padding:0}
+.addr-card{padding:14px 16px;border:1.5px solid var(--line);border-radius:var(--r);background:var(--surface)}
+.addr-card.main{border-color:var(--blue);background:var(--blue-soft)}
+.addr-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.addr-who{font-weight:700}
+.addr-text{color:var(--ink2);font-size:.96rem;line-height:1.45;white-space:pre-line;word-break:break-word}
+.addr-phone{color:var(--muted);font-size:.92rem;margin-top:2px}
+.addr-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.addr-empty{padding:22px 16px;text-align:center;color:var(--muted);border:1.5px dashed var(--line-strong);border-radius:var(--r);margin-bottom:16px}
+.addr-empty b{display:block;color:var(--ink);margin-bottom:2px}
+.addr-limit{font-size:.9rem;color:var(--muted);margin:-6px 0 14px}
+
+.save-addr{display:flex;align-items:center;gap:10px;margin:-2px 0 14px;font-size:.95rem;color:var(--ink2)}
+.save-addr[hidden]{display:none}
+
+.about-head{display:flex;align-items:center;gap:14px;margin:2px 0 16px}
+.about-head .mark{width:56px;height:56px;border-radius:16px}
+.about-head b{display:block;font-family:var(--display);font-size:1.4rem;line-height:1.1}
+.about-head span{color:var(--muted);font-size:.95rem}
+.about-list{margin:0 0 16px;border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.about-list div{display:flex;justify-content:space-between;gap:16px;padding:11px 16px;border-bottom:1px solid var(--line)}
+.about-list div:last-child{border-bottom:0}
+.about-list dt{color:var(--muted)}
+.about-list dd{font-weight:600;text-align:right;margin:0}
+.about-note{color:var(--ink2);font-size:.94rem;line-height:1.5;margin:0 0 16px}

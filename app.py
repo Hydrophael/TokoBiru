@@ -89,6 +89,7 @@ if not SECRET_KEY:
 MAX_JSON_BYTES = 64 * 1024
 MAX_PRODUCT_BODY_BYTES = 512 * 1024
 PRODUCT_WRITE_RE = re.compile(r"/api/products(?:/[0-9a-fA-F]{24})?")
+PROFILE_WRITE_RE = re.compile(r"/api/auth/profile")   # foto profil ikut dikirim di body, jadi batas ukurannya sama dengan foto produk
 
 app = Flask(__name__)
 app.config.update(
@@ -504,7 +505,8 @@ def object_id(value, label="ID"):
 # --------------------------------------------------------------------------- #
 HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key", "session_version",
                  "reset_code_hash", "reset_expires", "reset_sent_at", "reset_failed", "reset_locked_until",
-                 "image", "image_type", "image_v")   # foto produk: dikirim lewat /api/products/<id>/image
+                 "image", "image_type", "image_v",   # foto produk (/api/products/<id>/image) dan foto akun (/api/auth/avatar)
+                 "addresses")                        # buku alamat: hanya pemiliknya yang boleh membacanya
 
 
 def serialize_value(value):
@@ -535,10 +537,16 @@ def serialize(doc):
 
 
 def public_user(user):
+    """Data akun untuk pemiliknya sendiri (login, /auth/me, ubah profil). Bukan untuk daftar pengguna."""
     if not user:
         return None
-    return {"id": str(user["_id"]), "username": user["username"], "name": user["name"],
-            "email": user["email"], "role": user["role"]}
+    out = {"id": str(user["_id"]), "username": user["username"], "name": user["name"],
+           "email": user["email"], "role": user["role"]}
+    if user.get("image_v"):   # ?v= berganti saat foto berganti, jadi browser boleh menyimpannya lama
+        out["photo"] = f"/api/auth/avatar?v={int(user['image_v'])}"
+    if user["role"] == "user":
+        out["addresses"] = [address_json(item) for item in user.get("addresses", [])]
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -569,6 +577,41 @@ def new_user_doc(fields, role):
         "created_at": utcnow(),
         "failed": 0,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Buku alamat pelanggan (disimpan di dokumen user: users.addresses)
+# --------------------------------------------------------------------------- #
+ADDRESS_LIMIT = 5
+ADDRESS_LABELS = ("Rumah", "Kantor", "Kos", "Lainnya")
+
+
+def address_json(item):
+    return {"id": item["id"], "label": item["label"], "recipient": item["recipient"],
+            "phone": item["phone"], "address": item["address"], "main": bool(item.get("main"))}
+
+
+def address_form(data):
+    """Validasi satu alamat. Nomor HP dirapikan dulu (spasi, titik, strip dibuang), sama seperti saat checkout."""
+    data = dict(data)
+    if isinstance(data.get("phone"), str):
+        data["phone"] = re.sub(r"[\s.\-]", "", data["phone"])
+    form = Form(data)
+    form.choice("label", "Label alamat", ADDRESS_LABELS)
+    form.text("recipient", "Nama penerima", 2, 50, regex=PERSON_RE, regex_msg=NAME_ERROR)
+    form.text("phone", "Nomor HP", 8, 16, regex=PHONE_RE, regex_msg=PHONE_ERROR)
+    form.text("address", "Alamat pengiriman", 5, 200, multiline=True)
+    clean = form.done()
+    clean["main"] = data.get("main") is True   # hanya boolean sungguhan: "false" atau 0 tidak dianggap benar
+    return clean
+
+
+def save_addresses(db, user, addresses):
+    """Simpan daftar alamat. Selalu tepat satu alamat utama (bila daftar tidak kosong)."""
+    if addresses and not any(item.get("main") for item in addresses):
+        addresses[0]["main"] = True
+    db.users.update_one({"_id": user["_id"]}, {"$set": {"addresses": addresses}})
+    return [address_json(item) for item in addresses]
 
 
 # --------------------------------------------------------------------------- #
@@ -656,7 +699,9 @@ def csrf_token_valid():
 def guard():
     if request.path.startswith("/api/") and request.method not in SAFE_METHODS:
         too_big = request.content_length and request.content_length > MAX_JSON_BYTES
-        if too_big and not (request.method in ("POST", "PUT") and PRODUCT_WRITE_RE.fullmatch(request.path)):
+        photo_write = (request.method in ("POST", "PUT") and PRODUCT_WRITE_RE.fullmatch(request.path)) or \
+                      (request.method == "PATCH" and PROFILE_WRITE_RE.fullmatch(request.path))
+        if too_big and not photo_write:
             raise ApiError("Data terlalu besar", 413)
         if not csrf_token_valid():
             raise ApiError("Token keamanan tidak valid. Muat ulang halaman.", 403)
@@ -773,6 +818,112 @@ def auth_logout():
     return jsonify({"ok": True, "csrf": session["csrf"]})
 
 
+@app.patch("/api/auth/profile")
+@login_required
+def auth_profile():
+    """Ubah profil sendiri: nama dan foto. Username dan email dipakai untuk masuk dan pemulihan password.
+    Kunci `image` tidak dikirim: foto lama dibiarkan. Kosong: foto dihapus."""
+    form = Form(json_body())
+    form.text("name", "Nama lengkap", 2, 50, regex=PERSON_RE, regex_msg=NAME_ERROR)
+    form.image("image", "Foto profil")
+    clean = form.done()
+    db = get_db()
+    user = current_user()
+
+    changes = {}
+    notes = []
+    if clean["name"] != user["name"]:
+        changes["name"] = clean["name"]
+        notes.append(f"nama diubah ({user['name']} → {clean['name']})")
+    image_set, image_unset = split_image(clean)
+    update = {}
+    if image_set:
+        changes.update(image_set)
+        notes.append("foto diganti")
+    elif image_unset and user.get("image"):
+        update["$unset"] = image_unset
+        notes.append("foto dihapus")
+    if changes:
+        update["$set"] = changes
+    if update:
+        db.users.update_one({"_id": user["_id"]}, update)
+        audit("profil_ubah", ", ".join(notes))
+        user = db.users.find_one({"_id": user["_id"]})
+    return jsonify({"ok": True, "user": public_user(user)})
+
+
+@app.get("/api/auth/avatar")
+@login_required
+def auth_avatar():
+    """Foto profil milik akun yang sedang masuk (hanya miliknya sendiri)."""
+    user = current_user()
+    if not user.get("image"):
+        raise ApiError("Foto tidak ditemukan", 404)
+    resp = Response(bytes(user["image"]), mimetype=user.get("image_type") or "image/jpeg")
+    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"   # alamat berganti (?v=) saat foto berganti
+    return resp
+
+
+@app.post("/api/auth/addresses")
+@roles_required("user")
+def addresses_create():
+    clean = address_form(json_body())
+    db = get_db()
+    user = current_user()
+    addresses = list(user.get("addresses", []))
+    if len(addresses) >= ADDRESS_LIMIT:
+        raise ApiError(f"Maksimal {ADDRESS_LIMIT} alamat. Hapus salah satu dulu.", 409)
+    first = not addresses
+    if clean["main"] or first:
+        for item in addresses:
+            item["main"] = False
+    addresses.append({"id": secrets.token_hex(6), "label": clean["label"], "recipient": clean["recipient"],
+                      "phone": clean["phone"], "address": clean["address"], "main": clean["main"] or first})
+    saved = save_addresses(db, user, addresses)
+    audit("alamat_ubah", f"alamat {clean['label']} ditambah")
+    return jsonify({"addresses": saved}), 201
+
+
+def find_address(addresses, address_id):
+    for item in addresses:
+        if item["id"] == address_id:
+            return item
+    raise ApiError("Alamat tidak ditemukan", 404)
+
+
+@app.put("/api/auth/addresses/<address_id>")
+@roles_required("user")
+def addresses_update(address_id):
+    clean = address_form(json_body())
+    db = get_db()
+    user = current_user()
+    addresses = list(user.get("addresses", []))
+    target = find_address(addresses, address_id)
+    if clean["main"]:
+        for item in addresses:
+            item["main"] = False
+    target.update({"label": clean["label"], "recipient": clean["recipient"], "phone": clean["phone"],
+                   "address": clean["address"], "main": clean["main"] or bool(target.get("main"))})
+    saved = save_addresses(db, user, addresses)
+    audit("alamat_ubah", f"alamat {clean['label']} diubah")
+    return jsonify({"addresses": saved})
+
+
+@app.delete("/api/auth/addresses/<address_id>")
+@roles_required("user")
+def addresses_delete(address_id):
+    db = get_db()
+    user = current_user()
+    addresses = list(user.get("addresses", []))
+    target = find_address(addresses, address_id)
+    addresses = [item for item in addresses if item is not target]
+    if target.get("main") and addresses:   # yang utama dihapus: alamat pertama yang tersisa jadi utama
+        addresses[0]["main"] = True
+    saved = save_addresses(db, user, addresses)
+    audit("alamat_ubah", f"alamat {target['label']} dihapus")
+    return jsonify({"addresses": saved})
+
+
 @app.patch("/api/auth/password")
 @login_required
 def auth_password():
@@ -800,7 +951,7 @@ def auth_password():
         "$inc": {"session_version": 1}})
     # sesi yang dipakai sekarang ikut naik versi; sesi di perangkat lain tidak berlaku lagi
     session["sv"] = db.users.find_one({"_id": user["_id"]}).get("session_version", 1)
-    audit("password_ubah", "")
+    audit("password_ubah", "sesi di perangkat lain dikeluarkan")
     return jsonify({"ok": True})
 
 
@@ -1471,6 +1622,7 @@ def orders_create():
     form = Form(data)
     form.text("phone", "Nomor HP", 8, 16, regex=PHONE_RE, regex_msg=PHONE_ERROR)
     form.text("address", "Alamat pengiriman", 5, 200, multiline=True)
+    form.text("recipient", "Nama penerima", 2, 50, required=False, regex=PERSON_RE, regex_msg=NAME_ERROR)
     form.text("note", "Catatan", 0, 200, required=False, multiline=True)
     clean = form.done()
     wanted = parse_cart_items(data.get("items"))
@@ -1490,6 +1642,7 @@ def orders_create():
         order = {"user_id": user["_id"], "username": user["username"],
                  "items": lines, "total": sum(line["subtotal"] for line in lines),
                  "phone": clean["phone"], "address": clean["address"], "note": clean["note"],
+                 "recipient": clean["recipient"],
                  "status": "pending", "created_at": now, "updated_at": now,
                  "expires_at": now + timedelta(hours=PENDING_TTL_HOURS)}
         if key:
@@ -1592,11 +1745,34 @@ def stats():
     return jsonify(result)
 
 
+def user_listing(doc):
+    """Data pengguna untuk daftar master: seperti serialize(), ditambah alamat foto bila akun punya foto.
+    Alamatnya hanya bisa dibuka master (lihat users_avatar); ?v= berganti saat foto berganti."""
+    out = serialize(doc)
+    if doc.get("image_v"):
+        out["photo"] = f"/api/users/{out['id']}/avatar?v={int(doc['image_v'])}"
+    return out
+
+
 @app.get("/api/users")
 @roles_required("master")
 def users_list():
-    docs = get_db().users.find().sort("created_at", 1).limit(USERS_LIMIT)
-    return jsonify({"users": [serialize(u) for u in docs]})
+    # isi foto (image) tidak ikut diambil: daftar hanya butuh image_v untuk membentuk alamat fotonya
+    docs = get_db().users.find({}, {"image": 0}).sort("created_at", 1).limit(USERS_LIMIT)
+    return jsonify({"users": [user_listing(u) for u in docs]})
+
+
+@app.get("/api/users/<user_id>/avatar")
+@roles_required("master")
+def users_avatar(user_id):
+    """Foto profil pengguna mana pun, untuk halaman Pengguna. Khusus master; pelanggan dan admin ditolak."""
+    target_id = object_id(user_id, "Pengguna")
+    doc = get_db().users.find_one({"_id": target_id}, {"image": 1, "image_type": 1})
+    if not doc or not doc.get("image"):
+        raise ApiError("Foto tidak ditemukan", 404)
+    resp = Response(bytes(doc["image"]), mimetype=doc.get("image_type") or "image/jpeg")
+    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"   # alamat berganti (?v=) saat foto berganti
+    return resp
 
 
 @app.post("/api/users")
@@ -1644,7 +1820,7 @@ def users_update(user_id):
         if freed:
             detail += f" ({freed} pesanan belum dibayar dibatalkan)"
     audit("user_ubah", detail)
-    return jsonify({"user": serialize(db.users.find_one({"_id": target_id}))})
+    return jsonify({"user": user_listing(db.users.find_one({"_id": target_id}, {"image": 0}))})
 
 
 @app.delete("/api/users/<user_id>")

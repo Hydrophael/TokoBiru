@@ -6,6 +6,9 @@ import {
   MAX_CART_QTY,
   NAV,
   ORDER_FLOW,
+  ADDRESS_LABELS,
+  ADDRESS_LIMIT,
+  APP_INFO,
   ROLE_LABEL,
   SHOP_PAGE_SIZE,
   STATUS,
@@ -36,11 +39,13 @@ import {
   LOG_GROUPS,
   logTone,
   PRODUCT_GROUPS,
+  avatarTone,
+  stockFlag,
   managedProducts,
   productGroupCount,
 } from './core.js';
 import { EASE, burst, linkLabels, openModal, reducedMotion, toast, tweenNumber } from './ui.js';
-import { PHOTO_HINT, photoPreviewHtml } from './photo.js';
+import { AVATAR_HINT, PHOTO_HINT, avatarPreviewHtml, photoPreviewHtml } from './photo.js';
 import { actionTagHtml, actorHtml, logEmptyHtml, mountLogGrid, refreshLogGrid, visibleLogIds } from './logs-grid.js';
 import { mountProductGrid, productActionsHtml, productCountHtml, productNameHtml, productResetHtml } from './products-grid.js';
 
@@ -285,7 +290,7 @@ function navHtml(items) {
 
 const cartDrawerHtml = () => `<div class="scrim" id="scrim" data-act="close-cart"></div>
   <aside class="drawer" id="drawer" aria-label="Keranjang">
-    <div class="drawer-head"><h3>Keranjang</h3><button class="btn sm flat" data-act="close-cart" aria-label="Tutup keranjang">${icon('x', 18)}</button></div>
+    <div class="drawer-head"><h3>Keranjang <small class="muted num" id="cart-n"></small></h3><button class="btn sm flat" data-act="close-cart" aria-label="Tutup keranjang">${icon('x', 18)}</button></div>
     <div id="cart-items"></div>
     <div class="drawer-foot"><div class="line" style="border:0;padding:0 0 12px"><span>Total</span><span id="cart-total" class="price num">Rp 0</span></div>
       <button class="btn primary block" data-act="checkout" id="checkout-btn">Lanjut ke pemesanan</button></div>
@@ -321,6 +326,169 @@ let navFrame;
 addEventListener('resize', () => { cancelAnimationFrame(navFrame); navFrame = requestAnimationFrame(moveNavIndicator); });
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(moveNavIndicator);
 
+// --- Menu profil (pojok kanan atas): avatar + sapaan membuka menu akun ---
+// Desktop: kartu popover. HP (<= 600px): lembar yang naik dari bawah, dengan latar gelap di belakangnya.
+
+const firstName = name => String(name).trim().split(/\s+/)[0] || String(name);
+
+// Alamat foto profil dari server berbentuk /api/auth/avatar?v=angka; bentuk lain dianggap tidak ada foto
+const AVATAR_URL = /^\/api\/(?:auth\/avatar|users\/[0-9a-fA-F]{24}\/avatar)\?v=\d+$/;   // foto sendiri, atau foto pengguna (khusus master)
+export const avatarPhoto = user => (typeof user?.photo === 'string' && AVATAR_URL.test(user.photo) ? user.photo : '');
+
+export const avatarHtml = (user, size = '') => {
+  const photo = avatarPhoto(user);
+  return `<span class="av tone${avatarTone(user)}${size ? ' ' + size : ''}${photo ? ' has-photo' : ''}" aria-hidden="true">${photo ? `<img src="${photo}" alt="" decoding="async">` : escapeHtml(getInitials(user.name))}</span>`;
+};
+
+const roleTag = user => `<span class="tag ${escapeHtml(user.role)}">${escapeHtml(ROLE_LABEL[user.role] || user.role)}</span>`;
+
+const menuItem = (act, iconName, title, hint = '', attrs = '') =>
+  `<button type="button" class="pm-item" role="menuitem" data-act="${act}"${attrs}>${icon(iconName, 20)}<span class="pm-t"><b>${title}</b>${hint ? `<small>${hint}</small>` : ''}</span></button>`;
+
+const quickTile = (act, iconName, label, attrs = '') =>
+  `<button type="button" class="pm-q" role="menuitem" data-act="${act}"${attrs}><span class="pm-qi">${icon(iconName, 20)}</span><span>${label}</span></button>`;
+
+function profileMenuHtml() {
+  const user = state.user;
+  const customer = isCustomer();
+  const name = escapeHtml(user.name);
+
+  const quick = customer ? `<div class="pm-quick" role="none">
+      ${quickTile('nav', 'receipt', 'Pesanan', ' data-view="orders"')}
+      ${quickTile('address-open', 'pin', 'Alamat')}
+      ${quickTile('open-cart', 'cart', 'Keranjang')}
+    </div>` : '';
+
+  return `<div class="pm">
+      <button type="button" class="pm-btn" data-act="profile-menu" aria-haspopup="menu" aria-expanded="false" aria-controls="pm-pop" aria-label="Menu akun ${name}">
+        ${avatarHtml(user)}
+        <span class="pm-who"><small>${customer ? 'Halo,' : escapeHtml(ROLE_LABEL[user.role] || user.role)}</small><b>${escapeHtml(firstName(user.name))}</b></span>
+        ${icon('chevron', 16)}
+      </button>
+      <div class="pm-scrim" data-act="profile-close" aria-hidden="true"></div>
+      <div class="pm-pop" id="pm-pop" role="menu" aria-label="Akun" hidden>
+        <div class="pm-head" role="none">
+          ${avatarHtml(user, 'lg')}
+          <div class="pm-id"><b>${name}</b><span class="pm-mail">${escapeHtml(user.email)}</span>${customer ? '' : roleTag(user)}</div>
+        </div>
+        ${quick}
+        <div class="pm-list" role="none">
+          ${menuItem('profile-open', 'user', 'Profil saya', 'Nama dan data akun')}
+          ${menuItem('change-password', 'key', 'Ganti password', 'Jaga akun tetap aman')}
+          <div class="pm-sep" role="separator"></div>
+          ${menuItem('settings-open', 'gear', 'Pengaturan', 'Tema, ukuran teks, animasi')}
+          ${menuItem('about-open', 'info', 'Tentang aplikasi', 'Versi dan penyimpanan data')}
+          ${menuItem('install-app', 'download', 'Pasang aplikasi', 'Buka lebih cepat dari layar utama', ' hidden')}
+          <div class="pm-sep" role="separator"></div>
+          ${menuItem('logout', 'out', 'Keluar', '').replace('class="pm-item"', 'class="pm-item danger"')}
+        </div>
+      </div>
+    </div>`;
+}
+
+// Nama berubah: gambar ulang menu profil saja (header lainnya tidak disentuh)
+export function refreshProfileMenu() {
+  const current = $('#app .pm');
+  if (current) current.outerHTML = profileMenuHtml();
+}
+
+export function profileModal() {
+  const user = state.user;
+  const customer = isCustomer();
+  const photo = avatarPhoto(user);
+  const addresses = user.addresses || [];
+  const main = addresses.find(item => item.main) || addresses[0];
+
+  // Alamat dikelola di modal sendiri ("Alamat saya"); di sini hanya ringkasan dan tombol menuju ke sana
+  const shipping = customer ? `
+      <div class="pf-addr"><div class="set-t"><b>Alamat pengiriman</b>
+        <small>${main ? escapeHtml(`${main.label}: ${main.address.replace(/\s+/g, ' ')}`) : 'Belum ada alamat tersimpan.'}</small></div>
+        <button type="button" class="btn sm" data-act="address-open">${addresses.length ? 'Kelola' : 'Tambah'}</button></div>` : '';
+
+  openModal(`<h3>Profil saya</h3>
+    <div class="pf-head">${avatarHtml(user, 'xl')}<div class="pf-id"><b>${escapeHtml(user.name)}</b><span class="muted">@${escapeHtml(user.username)}</span>${roleTag(user)}</div></div>
+    <form data-form="profile" novalidate><div class="form-alert" role="alert"></div>
+      <div class="field photo-field pf-photo"><label>Foto profil (opsional)</label>
+        <div class="photo-row">
+          <div class="photo-preview round" data-photo-preview>${avatarPreviewHtml(photo)}</div>
+          <div class="photo-side">
+            <input type="file" class="sr-only" accept="image/*" data-photo-input data-photo-kind="avatar">
+            <input type="hidden" name="image" value="" disabled>
+            <div class="acts"><button type="button" class="btn sm" data-act="photo-pick">${icon('plus', 14)} Pilih foto</button>
+              <button type="button" class="btn sm danger" data-act="photo-clear"${photo ? '' : ' hidden'}>${icon('trash', 13)} Hapus foto</button></div>
+            <p class="muted small" data-photo-note>${AVATAR_HINT}</p>
+          </div>
+        </div></div>
+      <div class="field"><label>Nama lengkap</label><input class="input" name="name" required maxlength="50" autocomplete="name" value="${escapeHtml(user.name)}"></div>
+      <div class="field"><label>Email</label><input class="input" value="${escapeHtml(user.email)}" disabled></div>
+      <p class="muted small" style="margin:-6px 0 14px">Username dan email tidak bisa diubah di sini.</p>${shipping}
+      <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Simpan</button></div></form>`);
+}
+
+// --- Alamat saya (buku alamat pelanggan, tersimpan di akun) ---
+
+const addressCardHtml = item => {
+  const id = escapeHtml(item.id);
+  const label = escapeHtml(item.label);
+  return `<li class="addr-card${item.main ? ' main' : ''}">
+    <div class="addr-top"><span class="tag">${label}</span>${item.main ? '<span class="tag blue">Utama</span>' : ''}<span class="addr-who">${escapeHtml(item.recipient)}</span></div>
+    <div class="addr-text">${escapeHtml(item.address)}</div>
+    <div class="addr-phone num">${escapeHtml(item.phone)}</div>
+    <div class="addr-acts">
+      <button type="button" class="btn sm" data-act="address-edit" data-id="${id}">${icon('edit', 14)} Ubah</button>
+      ${item.main ? '' : `<button type="button" class="btn sm" data-act="address-main" data-id="${id}">Jadikan utama</button>`}
+      <button type="button" class="btn sm flat danger" data-act="address-del" data-id="${id}" aria-label="Hapus alamat ${label}">${icon('trash', 14)} Hapus</button>
+    </div></li>`;
+};
+
+export function addressesModal() {
+  const addresses = state.user.addresses || [];
+  const full = addresses.length >= ADDRESS_LIMIT;
+  const list = addresses.length
+    ? `<ul class="addr-list">${addresses.map(addressCardHtml).join('')}</ul>`
+    : '<div class="addr-empty"><b>Belum ada alamat</b>Simpan sekali, dipakai terus saat memesan.</div>';
+
+  openModal(`<h3>Alamat saya</h3><p class="sub">Tersimpan di akun Anda, jadi tetap ada di perangkat mana pun.</p>
+    ${list}
+    ${full ? `<p class="addr-limit">Maksimal ${ADDRESS_LIMIT} alamat. Hapus salah satu untuk menambah.</p>` : ''}
+    <div class="foot"><button type="button" class="btn" data-act="close-modal">Tutup</button>
+      <button type="button" class="btn primary" data-act="address-new"${full ? ' disabled' : ''}>${icon('plus', 15)} Tambah alamat</button></div>`);
+}
+
+export function addressFormModal(item = null) {
+  const addresses = state.user.addresses || [];
+  const values = item || { label: 'Rumah', recipient: state.user.name, phone: '', address: '', main: false };
+  // alamat pertama otomatis jadi utama; yang sudah utama tidak perlu kotak centang
+  const canPickMain = addresses.length > 0 && !values.main;
+  const options = ADDRESS_LABELS.map(label => `<option value="${label}"${label === values.label ? ' selected' : ''}>${label}</option>`).join('');
+
+  openModal(`<h3>${item ? 'Ubah alamat' : 'Tambah alamat'}</h3>
+    <form data-form="address" data-id="${item ? escapeHtml(item.id) : ''}" novalidate><div class="form-alert" role="alert"></div>
+      <div class="field"><label>Label</label><select class="select" name="label">${options}</select></div>
+      <div class="field"><label>Nama penerima</label><input class="input" name="recipient" required maxlength="50" autocomplete="name" value="${escapeHtml(values.recipient)}"></div>
+      <div class="field"><label>Nomor HP / WhatsApp</label><input class="input" name="phone" type="tel" inputmode="tel" required maxlength="20" placeholder="Contoh: 081234567890" autocomplete="tel" value="${escapeHtml(values.phone)}"></div>
+      <div class="field"><label>Alamat pengiriman</label><textarea class="input" name="address" required minlength="5" maxlength="160" placeholder="Nama jalan, nomor, kota" autocomplete="street-address">${escapeHtml(values.address)}</textarea></div>
+      ${canPickMain ? '<label class="save-addr"><input type="checkbox" class="tick" name="main" value="1"> Jadikan alamat utama</label>' : ''}
+      <div class="foot"><button type="button" class="btn" data-act="address-open">Batal</button><button type="submit" class="btn primary">Simpan</button></div></form>`);
+}
+
+// --- Tentang aplikasi ---
+
+export function aboutModal() {
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const user = state.user;
+  openModal(`<h3>Tentang aplikasi</h3>
+    <div class="about-head"><span class="mark" aria-hidden="true"></span><div><b>${escapeHtml(APP_INFO.name)}</b><span>${escapeHtml(APP_INFO.tagline)}</span></div></div>
+    <dl class="about-list">
+      <div><dt>Versi</dt><dd class="num">${escapeHtml(APP_INFO.version)}</dd></div>
+      <div><dt>Dibuka sebagai</dt><dd>${standalone ? 'Aplikasi terpasang' : 'Halaman web'}</dd></div>
+      <div><dt>Masuk sebagai</dt><dd>@${escapeHtml(user.username)} (${escapeHtml(ROLE_LABEL[user.role] || user.role)})</dd></div>
+      <div><dt>Dibangun dengan</dt><dd>${escapeHtml(APP_INFO.stack)}</dd></div>
+    </dl>
+    <p class="about-note">Data akun, alamat, dan pesanan disimpan di server toko. Keranjang dan pengaturan tampilan hanya tersimpan di perangkat ini.</p>
+    <div class="foot"><button type="button" class="btn primary" data-act="close-modal">Tutup</button></div>`);
+}
+
 export function renderShell() {
   const user = state.user;
   const navItems = NAV.filter(item => item.roles.includes(user.role));
@@ -341,10 +509,8 @@ export function renderShell() {
     ${brandHtml()}
     <nav class="nav" aria-label="Menu utama"><span class="nav-ind" aria-hidden="true"></span>${navHtml(navItems)}</nav>
     <div class="top-r">
-      ${customer ? `<button class="btn cart-btn" data-act="open-cart">${icon('cart')}<span class="hide-m">Keranjang</span><span class="count num" id="cart-count">0</span></button>` : ''}
-      <div class="who"><b>${escapeHtml(user.name)}</b><span class="tag ${user.role}">${ROLE_LABEL[user.role]}</span></div>
-      <button class="btn sm" data-act="change-password" aria-label="Ganti password" title="Ganti password">${icon('key', 15)}</button>
-      <button class="btn sm" data-act="logout" aria-label="Keluar">${icon('out', 15)}<span>Keluar</span></button>
+      ${customer ? `<button class="btn cart-btn" data-act="open-cart">${icon('cart')}<span class="hide-m">Keranjang</span><span class="cart-sum num" id="cart-sum" hidden></span><span class="count num" id="cart-count">0</span></button>` : ''}
+      ${profileMenuHtml()}
     </div>
   </div></header>
   <main class="wrap"><div id="content">${skeletonHtml()}</div></main>
@@ -504,7 +670,7 @@ function productCardHtml(product, index) {
   const description = String(product.description ?? '').trim();
   return `
     <article class="label${product.stock === 0 ? ' soldout' : ''}" data-card="${product.id}" style="--i:${Math.min(index, 8)}">
-      <div class="tile p${hashString(product.id) % 4}${productImage(product) ? ' has-photo' : ''}" data-act="detail" data-id="${product.id}"><span class="cat tag">${escapeHtml(product.category)}</span>${tileVisualHtml(product)}</div>
+      <div class="tile p${hashString(product.id) % 4}${productImage(product) ? ' has-photo' : ''}" data-act="detail" data-id="${product.id}"><span class="cat tag">${escapeHtml(product.category)}</span>${stockFlag(product)}${tileVisualHtml(product)}</div>
       <div class="lbody"><h3><button type="button" class="plink" data-act="detail" data-id="${product.id}" title="${escapeHtml(product.name)}">${escapeHtml(product.name)}</button></h3>${description ? `<p class="ldesc" data-act="detail" data-id="${product.id}">${escapeHtml(description)}</p>` : ''}${stockNote(product)}</div>
       ${cardFoot(product)}
     </article>`;
@@ -633,7 +799,13 @@ function shopView() {
   const searching = Boolean(state.query.trim());
 
   return `
-  <div class="page-head"><div><h2>Belanja</h2><p class="muted">Pilih barang, masukkan ke keranjang, lalu buat pesanan.</p></div></div>
+  <section class="welcome" aria-label="Selamat datang">
+    <div class="w-text"><h2>Halo, ${escapeHtml(firstName(state.user.name))}!</h2><p>Mau belanja apa hari ini? Pilih barang, masukkan ke keranjang, lalu buat pesanan.</p></div>
+    <div class="w-side">
+      <div class="w-facts"><span class="w-fact"><b class="num">${state.products.length}</b>produk</span><span class="w-fact"><b class="num">${state.categories.length}</b>kategori</span></div>
+      <button type="button" class="btn yellow" id="w-cart" data-act="open-cart" hidden></button>
+    </div>
+  </section>
   <div class="tools" id="tools">
     <div class="tools-row">
       <label class="search">${icon('search')}<input data-input="shop-search" placeholder="Cari nama produk" maxlength="50" aria-label="Cari produk" autocomplete="off" value="${escapeHtml(state.query)}"><button type="button" class="clear" data-act="clear-search" aria-label="Hapus pencarian"${searching ? '' : ' hidden'}>${icon('x', 16)}</button></label>
@@ -740,6 +912,15 @@ export function drawCart() {
     countEl.textContent = count;
     bump(countEl);
   }
+  const welcomeCart = $('#w-cart');
+  if (welcomeCart) {
+    welcomeCart.hidden = !lines.length;
+    welcomeCart.innerHTML = `${icon('cart', 17)} Lihat keranjang · ${formatRupiah(total)}`;
+  }
+  const drawerCount = $('#cart-n');
+  if (drawerCount) drawerCount.textContent = lines.length ? `${count} barang` : '';
+  const sumEl = $('#cart-sum');
+  if (sumEl) { sumEl.hidden = !lines.length; sumEl.textContent = formatRupiah(total); }
 
   $('#checkout-btn').disabled = !lines.length;
   renderCartBar(lines, count, total);
@@ -813,7 +994,7 @@ function orderCardHtml(order, staff, index = 0) {
   const [statusLabel, statusColor] = STATUS[order.status];
   const justUpdated = order.id === state.justUpdatedOrderId ? ' just' : '';
   const owner = staff ? ', atas nama <b>' + escapeHtml(order.username) + '</b>' : '';
-  const info = `<dl class="r-info">${infoRow('Kirim ke', escapeHtml(order.address))}${
+  const info = `<dl class="r-info">${infoRow('Penerima', escapeHtml(order.recipient))}${infoRow('Kirim ke', escapeHtml(order.address))}${
     infoRow('HP/WA', order.phone ? `<span class="num">${escapeHtml(order.phone)}</span>` : '')}${
     infoRow('Catatan', escapeHtml(order.note))}</dl>`;
   const autoCancel = order.cancel_reason === 'expired'
@@ -1063,10 +1244,16 @@ const roleSelectHtml = user =>
 const activeSwitchHtml = user =>
   `<label class="sw"><input type="checkbox" data-change="user-active" data-id="${user.id}" ${user.active ? 'checked' : ''} aria-label="Aktif ${escapeHtml(user.username)}"><span></span></label>`;
 
+// Foto akun (bila ada) menggantikan inisial; bentuknya sama dengan foto produk (.mini.has-photo)
+const userMiniHtml = user => {
+  const photo = avatarPhoto(user);
+  return `<span class="mini${photo ? ' has-photo' : ''}">${photo ? `<img src="${photo}" alt="" decoding="async">` : escapeHtml(getInitials(user.name))}</span>`;
+};
+
 function userRowHtml(user, index = 0) {
   // Akun master dan akun sendiri tidak bisa diubah dari sini
   const locked = user.role === 'master' || user.id === state.user.id;
-  return `<tr style="--i:${Math.min(index, 10)}"><td data-label="Pengguna"><div class="cell"><span class="mini">${escapeHtml(getInitials(user.name))}</span><div><b>${escapeHtml(user.name)}</b><div class="muted small">@${escapeHtml(user.username)}</div></div></div></td>
+  return `<tr style="--i:${Math.min(index, 10)}"><td data-label="Pengguna"><div class="cell">${userMiniHtml(user)}<div><b>${escapeHtml(user.name)}</b><div class="muted small">@${escapeHtml(user.username)}</div></div></div></td>
     <td data-label="Email">${escapeHtml(user.email)}</td>
     <td data-label="Role">${locked ? `<span class="tag ${user.role}">${ROLE_LABEL[user.role]}</span>` : roleSelectHtml(user)}</td>
     <td data-label="Aktif">${locked ? '<span class="tag ok">Aktif</span>' : activeSwitchHtml(user)}</td>

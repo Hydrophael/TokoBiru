@@ -6,9 +6,9 @@
 // - File lain (halaman, JS, CSS) memakai "jaringan dulu": bila ada sinyal, versi terbaru yang dipakai,
 //   jadi setelah deploy tidak ada campuran file lama dan baru. Salinan tersimpan hanya dipakai saat offline.
 
-const CACHE = 'tokobiru-shell-v2';
+const CACHE = 'tokobiru-shell-v4';
 const SHELL = ['/', '/static/style.css', '/static/app.js', '/static/core.js', '/static/views.js',
-  '/static/ui.js', '/static/photo.js', '/static/layout.js', '/static/webix-core.js', '/static/logs-grid.js', '/static/products-grid.js'];
+  '/static/ui.js', '/static/photo.js', '/static/settings.js', '/static/layout.js', '/static/webix-core.js', '/static/logs-grid.js', '/static/products-grid.js', '/static/theme.js'];
 
 self.addEventListener('install', event => {
   event.waitUntil(
