@@ -453,6 +453,12 @@ html.lock{overflow:hidden}
 .pay-row.static{grid-template-columns:minmax(0,1fr);grid-template-areas:"label" "value"}
 .pay-row.static b{color:var(--warn)}
 .r-pay .btn.sm{background:var(--surface);min-height:34px;padding:0 12px}
+.r-proof{border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:14px}
+.r-proof .proof-title{display:block;font-size:.95rem;margin-bottom:6px}
+.r-proof .proof-img{display:block;margin-bottom:6px}
+.r-proof .proof-img img{display:block;max-width:100%;max-height:280px;margin:0 auto;border-radius:var(--r-sm);border:1px solid var(--line)}
+.r-proof .proof-note{margin:0 0 8px;font-size:.84rem;line-height:1.4;color:var(--ink2)}
+.r-proof .btn.sm{min-height:34px;padding:0 12px}
 .r-pay-hint{margin-top:4px;padding-top:8px;border-top:1px dashed var(--warn-line);font-size:.82rem;line-height:1.4;color:var(--ink2)}
 
 .auth-card .input::placeholder{color:var(--muted)}

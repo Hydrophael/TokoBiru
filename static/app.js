@@ -49,7 +49,7 @@ import {
   toast,
   withTransition
 } from './ui.js';
-import { choosePhoto, clearPhoto, handlePhotoInput } from './photo.js';
+import { choosePhoto, clearPhoto, compressImage, handlePhotoInput } from './photo.js';
 import './layout.js';
 import { applySettings, installApp, loadSettings, setTextSize, setTheme, settingsModal, syncInstall, toggleSetting } from './settings.js';
 import { applyLogFilter, visibleLogIds } from './logs-grid.js';
@@ -576,6 +576,30 @@ function filterOrders(el) {
     $('#olist').innerHTML = orderCards();
     $('#orail .active')?.focus({ preventScroll: true });
   });
+}
+
+// Bukti transfer: foto dikecilkan di browser (sisi terpanjang 1000 px, sekitar 120 KB) lalu dikirim sebagai data URL
+async function uploadProof(input) {
+  const file = input.files?.[0];
+  const id = input.dataset.id;
+  input.value = '';
+  if (!file || !id) return;
+
+  const button = input.closest('.r-proof')?.querySelector('[data-act="proof-pick"]');
+  const label = button?.textContent;
+  if (button) { button.disabled = true; button.textContent = 'Mengunggah…'; }
+  try {
+    const image = await compressImage(file, { side: 1000, target: 120 * 1024, limit: 200 * 1024 });
+    const { order } = await api(`/orders/${id}/proof`, { method: 'POST', body: { image } });
+    const index = state.orders.findIndex(item => item.id === id);
+    if (index >= 0) state.orders[index] = order;
+    toast('Bukti transfer terkirim. Admin akan mengecek pembayaran Anda.', 'ok');
+    if ($(`#modal-root [data-order="${id}"]`)) orderDetailModal(order);
+    if (state.view === 'orders' && $('#olist')) $('#olist').innerHTML = orderCards();
+  } catch (err) {
+    toast(err.fields?.image || err.message, 'err');
+    if (button && button.isConnected) { button.disabled = false; button.textContent = label; }
+  }
 }
 
 function openOrder(el) {
@@ -1108,6 +1132,7 @@ const actions = {
   'prod-q-clear': clearProductSearch,
   'prod-reset': resetProductFilter,
   'photo-pick': el => choosePhoto(el.closest('form')),
+  'proof-pick': el => el.closest('.r-proof')?.querySelector('[data-proof-input]')?.click(),
   'photo-clear': el => clearPhoto(el.closest('form')),
 
   'user-new': userModal,
@@ -1427,6 +1452,7 @@ async function onChange(e) {
   if (target.matches('[data-log-action]')) { setLogAction(target); return; }
   if (target.matches('[data-prod-category]')) { setProductCategory(target); return; }
   if (target.matches('[data-photo-input]')) { await handlePhotoInput(target); return; }
+  if (target.matches('[data-proof-input]')) { await uploadProof(target); return; }
   if (target.matches('[data-addr-pick]')) { pickCheckoutAddress(target); return; }
   if (target.matches('[data-co-pick]')) { updateCheckout(target.closest('form')); return; }
 

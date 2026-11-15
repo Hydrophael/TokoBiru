@@ -92,7 +92,7 @@ export function ewalletBoxHtml(order) {
   const deadline = order.expires_at
     ? `<span class="qris-limit">Bayar dalam <b class="qris-timer" data-expires="${escapeHtml(order.expires_at)}">${countdownText(msLeft(order.expires_at))}</b></span>` : '';
   const action = order.ewallet_url
-    ? `<a class="btn primary" href="${escapeHtml(order.ewallet_url)}" target="_blank" rel="noopener">Bayar dengan ${name}</a>`
+    ? `<a class="btn primary" style="text-decoration:none" href="${escapeHtml(order.ewallet_url)}" target="_blank" rel="noopener">Bayar dengan ${name}</a>`
     : `<p class="qris-hint">Buka aplikasi ${name} lalu setujui pembayaran yang masuk.</p>`;
   return `<section class="qris" data-qris="${escapeHtml(order.id)}" aria-label="Bayar dengan ${name}">
     <div class="qris-head">${ewalletBadgeHtml(order.payment_method)}<span>TokoBiru</span></div>
@@ -977,6 +977,22 @@ const orderActions = order => (isStaff() ? staffOrderActions(order) : customerOr
 
 const orderPaymentHtml = order => paymentBoxHtml(order, 'Cara bayar');
 
+// Bukti transfer: pelanggan mengunggah selama pesanan belum dibayar; admin melihatnya untuk mencocokkan dengan mutasi rekening
+function proofBoxHtml(order, canUpload) {
+  if (order.payment_method !== 'transfer') return '';
+  const has = Boolean(order.proof_at);
+  if (!has && !canUpload) return '';
+  const src = `/api/orders/${escapeHtml(order.id)}/proof?v=${encodeURIComponent(order.proof_at || '')}`;
+  const image = has
+    ? `<a class="proof-img" href="${src}" target="_blank" rel="noopener" aria-label="Buka bukti transfer"><img src="${src}" alt="Bukti transfer ${escapeHtml(order.code)}" loading="lazy"></a>
+       <p class="proof-note">Diunggah ${formatDate(order.proof_at)}${canUpload ? '. Admin akan mengecek pembayaran Anda.' : ''}</p>`
+    : '<p class="proof-note">Sudah transfer? Unggah foto atau tangkapan layar bukti transfernya supaya admin bisa mengecek.</p>';
+  const action = canUpload
+    ? `<button type="button" class="btn sm" data-act="proof-pick">${has ? 'Ganti bukti' : 'Unggah bukti transfer'}</button><input type="file" accept="image/*" hidden data-proof-input data-id="${escapeHtml(order.id)}">`
+    : '';
+  return `<section class="r-proof" aria-label="Bukti transfer"><b class="proof-title">Bukti transfer</b>${image}${action}</section>`;
+}
+
 const orderLineHtml = item =>
   `<li><span>${escapeHtml(item.name)}</span><span class="num">${formatRupiah(item.subtotal)}</span><em class="num">${item.qty} × ${formatRupiah(item.price)}</em></li>`;
 
@@ -1013,7 +1029,8 @@ const orderAutoCancelHtml = order => AUTO_CANCEL_TEXT[order.cancel_reason]
 function orderPayBoxHtml(order) {
   if (order.payment_method === 'cash') return cashNoteHtml(order);
   if (isEwallet(order.payment_method)) return ewalletBoxHtml(order);
-  return order.payment_method === 'qris' ? qrisBoxHtml(order) : orderPaymentHtml(order);
+  if (order.payment_method === 'qris') return qrisBoxHtml(order);
+  return orderPaymentHtml(order) + proofBoxHtml(order, true);
 }
 
 function orderSummaryHtml(order) {
@@ -1030,8 +1047,9 @@ function orderCardHtml(order, staff, index = 0) {
   const hint = !staff && order.status === 'pending' && order.payment_method !== 'cash'
     ? ((order.payment_method === 'qris' || isEwallet(order.payment_method)) && order.expires_at
       ? `<p class="r-hint">Bayar dalam <b class="qris-timer" data-expires="${escapeHtml(order.expires_at)}">${countdownText(msLeft(order.expires_at))}</b></p>`
-      : '<p class="r-hint">Belum dibayar. Buka untuk bayar.</p>') : '';
+      : `<p class="r-hint">${order.proof_at ? 'Bukti terkirim. Menunggu konfirmasi admin.' : 'Belum dibayar. Buka untuk bayar.'}</p>`) : '';
   const acts = staff ? orderActions(order) : '';
+  const proofHint = staff && order.status === 'pending' && order.proof_at ? '<p class="r-hint">Bukti transfer sudah diunggah</p>' : '';
 
   return `
     <article class="receipt st-${order.status}" style="--i:${Math.min(index, 8)}" data-act="order-open" data-id="${order.id}" role="button" tabindex="0" aria-label="Buka pesanan ${escapeHtml(order.code)}">
@@ -1039,7 +1057,7 @@ function orderCardHtml(order, staff, index = 0) {
         <span class="muted small r-date">${formatDate(order.created_at)}${owner}</span>
         <span class="stamp ${statusColor}${justUpdated}">${statusLabel}</span></div>
       <p class="r-sum">${orderSummaryHtml(order)}</p>
-      ${hint}${staff ? paymentFlagBrief(order) : ''}
+      ${hint}${proofHint}${staff ? paymentFlagBrief(order) : ''}
       <div class="r-foot"><strong class="num">${formatRupiah(order.total)}</strong><span class="r-more">Lihat detail</span></div>
       ${acts ? `<div class="acts">${acts}</div>` : ''}
     </article>`;
@@ -1060,7 +1078,7 @@ export function orderDetailModal(order) {
     ${timelineHtml(order.status, order)}
     <ul class="r-lines">${order.items.map(orderLineHtml).join('')}${shippingLineHtml(order)}</ul>
     <div class="r-total"><span>Total</span><strong class="num">${formatRupiah(order.total)}</strong></div>
-    ${orderInfoHtml(order)}${orderAutoCancelHtml(order)}${staff ? paymentFlagBox(order) : ''}${payment}
+    ${orderInfoHtml(order)}${orderAutoCancelHtml(order)}${staff ? paymentFlagBox(order) + proofBoxHtml(order, false) : ''}${payment}
     <div class="foot wrap"><button type="button" class="btn sm" data-act="close-modal">Tutup</button>${orderActions(order)}${remove}</div>
   </div>`);
 }

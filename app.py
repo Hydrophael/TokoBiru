@@ -105,6 +105,7 @@ MAX_JSON_BYTES = 64 * 1024
 MAX_PRODUCT_BODY_BYTES = 512 * 1024
 PRODUCT_WRITE_RE = re.compile(r"/api/products(?:/[0-9a-fA-F]{24})?")
 PROFILE_WRITE_RE = re.compile(r"/api/auth/profile")
+PROOF_WRITE_RE = re.compile(r"/api/orders/[0-9a-fA-F]{24}/proof")
 
 app = Flask(__name__)
 app.config.update(
@@ -696,7 +697,8 @@ def guard():
     if request.path.startswith("/api/") and request.method not in SAFE_METHODS:
         too_big = request.content_length and request.content_length > MAX_JSON_BYTES
         photo_write = (request.method in ("POST", "PUT") and PRODUCT_WRITE_RE.fullmatch(request.path)) or \
-                      (request.method == "PATCH" and PROFILE_WRITE_RE.fullmatch(request.path))
+                      (request.method == "PATCH" and PROFILE_WRITE_RE.fullmatch(request.path)) or \
+                      (request.method == "POST" and PROOF_WRITE_RE.fullmatch(request.path))
         if too_big and not photo_write:
             raise ApiError("Data terlalu besar", 413)
         if not csrf_token_valid():
@@ -1772,6 +1774,50 @@ def qris_scan(token):
                 return qris_page(False, "Simulasi gagal", ["Xendit tidak merespons. Coba scan lagi."], 502)
         mark_order_paid(db, order, "xendit" if XENDIT_SIMULATE_SCAN else "qris", QRIS_ACTOR)
     return qris_page(True, "Pembayaran berhasil", [format_rupiah(order["total"]), f"Pesanan {order['code']}"])
+
+
+@app.post("/api/orders/<order_id>/proof")
+@roles_required("user")
+def order_proof_upload(order_id):
+    # Bukti transfer disimpan di koleksi terpisah (kunci = id pesanan) supaya daftar pesanan tidak ikut memuat gambar
+    db = get_db()
+    user = current_user()
+    order = db.orders.find_one({"_id": object_id(order_id, "Pesanan")})
+    if not order or order["user_id"] != user["_id"] or order.get("payment_method") != "transfer":
+        raise ApiError("Pesanan tidak ditemukan", 404)
+    order = settle_overdue(db, order)
+    if order["status"] != "pending":
+        raise ApiError("Bukti hanya bisa diunggah selama pesanan belum dibayar", 409)
+    form = Form(json_body())
+    form.image("image", "Bukti transfer")
+    clean = form.done()
+    if not clean.get("image"):
+        raise ApiError("Periksa kembali isian Anda", 422, {"image": "Pilih foto bukti transfer"})
+    data, mime = clean["image"]
+    now = utcnow()
+    db.order_proofs.replace_one({"_id": order["_id"]},
+                                {"_id": order["_id"], "image": data, "type": mime, "uploaded_at": now}, upsert=True)
+    db.orders.update_one({"_id": order["_id"], "status": "pending"}, {"$set": {"proof_at": now, "updated_at": now}})
+    audit("bukti_transfer", order["code"])
+    return jsonify({"order": order_json(db.orders.find_one({"_id": order["_id"]}), user)})
+
+
+@app.get("/api/orders/<order_id>/proof")
+@login_required
+def order_proof_view(order_id):
+    # Hanya pemilik pesanan dan admin
+    db = get_db()
+    user = current_user()
+    order = db.orders.find_one({"_id": object_id(order_id, "Pesanan")})
+    if not order or (user["role"] == "user" and order["user_id"] != user["_id"]):
+        raise ApiError("Bukti tidak ditemukan", 404)
+    proof = db.order_proofs.find_one({"_id": order["_id"]})
+    if not proof:
+        raise ApiError("Bukti tidak ditemukan", 404)
+    resp = Response(bytes(proof["image"]), mimetype=proof.get("type") or "image/jpeg")
+    resp.headers["Cache-Control"] = "private, no-store"
+    resp.headers["Content-Disposition"] = "inline"
+    return resp
 
 
 _last_ewallet_sync = {}
