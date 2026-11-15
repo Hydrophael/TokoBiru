@@ -114,6 +114,7 @@ TRANSITIONS = {
 USER_TRANSITIONS = {("pending", "cancelled"), ("shipped", "completed")}
 REVENUE_STATUS = ("paid", "shipped", "completed")
 OPEN_STATUS = ("pending", "paid", "shipped")
+CLOSED_STATUS = ("completed", "cancelled")
 MAX_CART_LINES = 30
 WIB_OFFSET = timedelta(hours=7)
 
@@ -466,7 +467,7 @@ def object_id(value, label="ID"):
 HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key", "session_version", "pay_token",
                  "reset_code_hash", "reset_expires", "reset_sent_at", "reset_failed", "reset_locked_until",
                  "image", "image_type", "image_v",
-                 "addresses")
+                 "addresses", "hidden_by_user", "hidden_at")
 
 
 def serialize_value(value):
@@ -1466,7 +1467,8 @@ def orders_list():
         closed_orders = db.orders.find({"status": {"$nin": list(OPEN_STATUS)}}).sort("created_at", -1).limit(ORDERS_LIMIT)
         docs = sorted([*open_orders, *closed_orders], key=lambda o: o["created_at"], reverse=True)
     else:
-        docs = db.orders.find({"user_id": user["_id"]}).sort("created_at", -1).limit(ORDERS_LIMIT)
+        # Pesanan yang sudah dihapus pelanggan hanya disembunyikan; toko tetap menyimpannya untuk laporan
+        docs = db.orders.find({"user_id": user["_id"], "hidden_by_user": {"$ne": True}}).sort("created_at", -1).limit(ORDERS_LIMIT)
     return jsonify({"orders": [order_json(o, user) for o in docs]})
 
 
@@ -1634,6 +1636,35 @@ def order_simulate_pay(order_id):
         raise ApiError("Pesanan sudah dibatalkan atau kedaluwarsa", 409)
     mark_order_paid(db, order, "qris")
     return jsonify({"order": order_json(db.orders.find_one({"_id": order["_id"]}), user)})
+
+
+@app.delete("/api/orders/<order_id>")
+@roles_required("user")
+def order_hide(order_id):
+    # Hapus lunak: pesanan hilang dari daftar pelanggan, data toko (omzet, log) tidak berubah
+    db = get_db()
+    user = current_user()
+    order = db.orders.find_one({"_id": object_id(order_id, "Pesanan")})
+    if not order or order["user_id"] != user["_id"]:
+        raise ApiError("Pesanan tidak ditemukan", 404)
+    if order["status"] not in CLOSED_STATUS:
+        raise ApiError("Hanya pesanan selesai atau dibatalkan yang bisa dihapus", 409)
+    db.orders.update_one({"_id": order["_id"]}, {"$set": {"hidden_by_user": True, "hidden_at": utcnow()}})
+    audit("pesanan_hapus", order["code"])
+    return jsonify({"ok": True})
+
+
+@app.post("/api/orders/clear-history")
+@roles_required("user")
+def orders_clear_history():
+    db = get_db()
+    user = current_user()
+    result = db.orders.update_many(
+        {"user_id": user["_id"], "status": {"$in": list(CLOSED_STATUS)}, "hidden_by_user": {"$ne": True}},
+        {"$set": {"hidden_by_user": True, "hidden_at": utcnow()}})
+    if result.modified_count:
+        audit("pesanan_bersihkan", f"{result.modified_count} pesanan")
+    return jsonify({"removed": result.modified_count})
 
 
 def order_summary(db):

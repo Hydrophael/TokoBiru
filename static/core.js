@@ -24,6 +24,7 @@ const ACTION_LABEL = {
   password_reset: 'Password Direset', reset_gagal: 'Reset Gagal',
   produk_tambah: 'Produk Ditambah', produk_ubah: 'Produk Diubah', produk_hapus: 'Produk Dihapus',
   pesanan_buat: 'Pesanan Dibuat', pesanan_status: 'Status Pesanan Berubah', pesanan_kedaluwarsa: 'Pesanan Kedaluwarsa',
+  pesanan_hapus: 'Pesanan Dihapus', pesanan_bersihkan: 'Riwayat Dibersihkan',
   user_buat: 'Pengguna Dibuat', user_ubah: 'Pengguna Diubah', user_hapus: 'Pengguna Dihapus',
   profil_ubah: 'Profil Diubah', alamat_ubah: 'Alamat Diubah',
   akses_ditolak: 'Akses Ditolak'

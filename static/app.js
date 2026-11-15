@@ -61,6 +61,7 @@ import {
   filterModal,
   forgotModal,
   orderCards,
+  orderDetailModal,
   orderRailHtml,
   passwordModal,
   productModal,
@@ -289,6 +290,7 @@ function closeCart() {
 function reorder(el) {
   const order = state.orders.find(o => o.id === el.dataset.id);
   if (!order) return;
+  if ($('#modal-root').firstChild) closeModal();
 
   let added = 0;
   let skipped = 0;
@@ -558,6 +560,37 @@ function filterOrders(el) {
   });
 }
 
+function openOrder(el) {
+  const order = state.orders.find(item => item.id === el.dataset.id);
+  if (order) orderDetailModal(order);
+}
+
+async function deleteOrder(el) {
+  const order = state.orders.find(item => item.id === el.dataset.id);
+  if (!order) return;
+  const ok = await confirmDialog(`Hapus pesanan ${order.code}?`, 'Pesanan hilang dari daftar Anda. Toko tetap menyimpan catatannya untuk laporan.', 'Hapus', true);
+  if (!ok) { orderDetailModal(order); return; }
+  try {
+    await api('/orders/' + order.id, { method: 'DELETE', body: {} });
+    toast('Pesanan dihapus', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+  await reload();
+}
+
+async function clearOrderHistory() {
+  const ok = await confirmDialog('Bersihkan riwayat?', 'Semua pesanan selesai atau dibatalkan dihapus dari daftar Anda. Pesanan yang masih berjalan tidak ikut terhapus.', 'Bersihkan', true);
+  if (!ok) return;
+  try {
+    const { removed } = await api('/orders/clear-history', { method: 'POST', body: {} });
+    toast(removed ? `${removed} pesanan dihapus` : 'Tidak ada riwayat untuk dibersihkan', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+  await reload();
+}
+
 async function changeOrderStatus(el) {
   const { id, status } = el.dataset;
 
@@ -570,6 +603,7 @@ async function changeOrderStatus(el) {
   el.disabled = true;
   try {
     await api(`/orders/${id}/status`, { method: 'PATCH', body: { status } });
+    if ($('#modal-root').firstChild) closeModal();
     toast('Status pesanan diperbarui', 'ok');
     state.justUpdatedOrderId = id;
     await reload();
@@ -599,7 +633,14 @@ function showQrisResult(id, status) {
   }
   const order = state.orders.find(item => item.id === id);
   if (order) order.status = status;
-  if (state.view === 'orders') setTimeout(() => { if (state.view === 'orders') reload(); }, 1600);
+  if (state.view === 'orders') {
+    setTimeout(async () => {
+      if (state.view !== 'orders') return;
+      await reload();
+      const fresh = $(`#modal-root [data-order="${id}"]`) && state.orders.find(item => item.id === id);
+      if (fresh) orderDetailModal(fresh);
+    }, 1600);
+  }
 }
 
 // Layar QR memantau status pesanan sampai dibayar atau dibatalkan
@@ -1017,6 +1058,9 @@ const actions = {
   ofilter: filterOrders,
   copy: copyToClipboard,
   'qris-sim': simulateQrisScan,
+  'order-open': openOrder,
+  'order-del': deleteOrder,
+  'orders-clear': clearOrderHistory,
   reorder,
   'order-status': changeOrderStatus,
 
@@ -1440,6 +1484,7 @@ function onModalKeydown(e) {
   const modalOpen = Boolean($('#modal-root').firstChild);
 
   if (e.key === 'Escape') { handleEscape(modalOpen); return; }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('.receipt[data-act]')) { e.preventDefault(); e.target.click(); return; }
   if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && profileMenuOpen()) { moveMenuFocus(e); return; }
   if (e.key === 'Enter' && e.target.matches?.('#f-min, #f-max')) { e.preventDefault(); applyFilters(); return; }
   if (e.key === 'Tab' && modalOpen) trapFocus(e);

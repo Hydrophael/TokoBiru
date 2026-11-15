@@ -848,7 +848,7 @@ html.lock{overflow:hidden}
 .receipt.st-pending{border-color:var(--warn-line)}
 .steps li span{text-wrap:balance}
 .r-info{display:grid;gap:7px;margin:0 0 14px;font-size:.92rem}
-.r-info>div{display:grid;grid-template-columns:62px minmax(0,1fr);gap:10px;align-items:baseline}
+.r-info>div{display:grid;grid-template-columns:92px minmax(0,1fr);gap:10px;align-items:baseline}
 .r-info dt{color:var(--muted)}
 .r-info dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
 .r-auto{margin:0 0 14px;padding:8px 10px;border-radius:var(--r-sm);background:var(--bg-soft);color:var(--ink2);font-size:.86rem;line-height:1.45}
@@ -1131,3 +1131,18 @@ html.calm *,html.calm *::before,html.calm *::after{animation:none!important;tran
 .qris-ok span{font-size:.9rem;color:var(--ink2)}
 .qris-ok.bad b{color:var(--err)}
 .qris.paid{background:var(--ok-bg);border-color:var(--ok-line)}
+/* Kartu pesanan ringkas; rincian dibuka di modal */
+.receipts{--gap:16px;grid-template-columns:repeat(auto-fill,minmax(270px,1fr))}
+.receipt[data-act]{display:grid;gap:10px;padding:18px 20px;cursor:pointer;transition:box-shadow .25s,border-color .15s,transform .15s}
+.receipt[data-act]:hover{border-color:var(--blue)}
+.receipt[data-act]:active{transform:scale(.99)}
+.receipt[data-act]:focus-visible{outline:3px solid var(--blue-ring);outline-offset:2px}
+.r-sum{margin:0;font-size:.98rem;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.r-sum em{font-style:normal;color:var(--muted);font-size:.88rem;margin-left:4px}
+.r-hint{margin:0;font-size:.86rem;font-weight:600;color:var(--warn)}
+.r-foot{display:flex;justify-content:space-between;align-items:baseline;gap:10px;border-top:1.5px dashed var(--line-strong);padding-top:10px}
+.r-foot strong{font-family:var(--display);font-size:1.3rem}
+.r-more{font-size:.86rem;font-weight:600;color:var(--blue-text)}
+.od-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.modal .foot.wrap{flex-wrap:wrap}
+.modal .foot .btn.push{order:-1;margin-right:auto}

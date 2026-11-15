@@ -960,30 +960,65 @@ const shippingLineHtml = order => order.shipping_method
 
 const infoRow = (label, value) => (value ? `<div><dt>${label}</dt><dd>${value}</dd></div>` : '');
 
+const CLOSED_ORDER = ['completed', 'cancelled'];
+
+function orderInfoHtml(order) {
+  return `<dl class="r-info">${infoRow('Penerima', escapeHtml(order.recipient))}${infoRow('Pengiriman', escapeHtml(SHIPPING_LABEL[order.shipping_method] || ''))}${infoRow('Pembayaran', escapeHtml(PAYMENT_LABEL[order.payment_method] || ''))}${infoRow('Kirim ke', escapeHtml(order.address))}${
+    infoRow('HP/WA', order.phone ? `<span class="num">${escapeHtml(order.phone)}</span>` : '')}${
+    infoRow('Catatan', escapeHtml(order.note))}</dl>`;
+}
+
+const orderAutoCancelHtml = order => order.cancel_reason === 'expired'
+  ? '<p class="r-auto">Dibatalkan otomatis karena melewati batas waktu bayar.</p>' : '';
+
+function orderPayBoxHtml(order) {
+  if (order.payment_method === 'cash') return cashNoteHtml(order);
+  return order.payment_method === 'qris' ? qrisBoxHtml(order) : orderPaymentHtml(order);
+}
+
+function orderSummaryHtml(order) {
+  const [first, ...rest] = order.items;
+  return `${first ? escapeHtml(first.name) : 'Pesanan'}${rest.length ? ` <em>+${rest.length} lainnya</em>` : ''}`;
+}
+
+// Kartu ringkas: rincian lengkap dibuka lewat orderDetailModal supaya daftar tidak memanjang
 function orderCardHtml(order, staff, index = 0) {
   const [statusLabel, statusColor] = STATUS[order.status];
   const justUpdated = order.id === state.justUpdatedOrderId ? ' just' : '';
   const owner = staff ? ', atas nama <b>' + escapeHtml(order.username) + '</b>' : '';
-  const info = `<dl class="r-info">${infoRow('Penerima', escapeHtml(order.recipient))}${infoRow('Pengiriman', escapeHtml(SHIPPING_LABEL[order.shipping_method] || ''))}${infoRow('Pembayaran', escapeHtml(PAYMENT_LABEL[order.payment_method] || ''))}${infoRow('Kirim ke', escapeHtml(order.address))}${
-    infoRow('HP/WA', order.phone ? `<span class="num">${escapeHtml(order.phone)}</span>` : '')}${
-    infoRow('Catatan', escapeHtml(order.note))}</dl>`;
-  const autoCancel = order.cancel_reason === 'expired'
-    ? '<p class="r-auto">Dibatalkan otomatis karena melewati batas waktu bayar.</p>' : '';
-  const payment = !staff && order.status === 'pending'
-    ? (order.payment_method === 'cash' ? cashNoteHtml(order) : order.payment_method === 'qris' ? qrisBoxHtml(order) : orderPaymentHtml(order)) : '';
+  const hint = !staff && order.status === 'pending' && order.payment_method !== 'cash'
+    ? '<p class="r-hint">Belum dibayar. Buka untuk bayar.</p>' : '';
+  const acts = staff ? orderActions(order) : '';
 
   return `
-    <article class="receipt st-${order.status}" style="--i:${Math.min(index, 8)}">
+    <article class="receipt st-${order.status}" style="--i:${Math.min(index, 8)}" data-act="order-open" data-id="${order.id}" role="button" tabindex="0" aria-label="Buka pesanan ${escapeHtml(order.code)}">
       <div class="r-top"><span class="r-code num">${escapeHtml(order.code)}</span>
         <span class="muted small r-date">${formatDate(order.created_at)}${owner}</span>
         <span class="stamp ${statusColor}${justUpdated}">${statusLabel}</span></div>
-      ${timelineHtml(order.status)}
-      <ul class="r-lines">${order.items.map(orderLineHtml).join('')}${shippingLineHtml(order)}</ul>
-      <div class="r-total"><span>Total</span><strong class="num">${formatRupiah(order.total)}</strong></div>
-      ${info}${autoCancel}
-      ${payment}
-      <div class="acts">${orderActions(order)}</div>
+      <p class="r-sum">${orderSummaryHtml(order)}</p>
+      ${hint}
+      <div class="r-foot"><strong class="num">${formatRupiah(order.total)}</strong><span class="r-more">Lihat detail</span></div>
+      ${acts ? `<div class="acts">${acts}</div>` : ''}
     </article>`;
+}
+
+export function orderDetailModal(order) {
+  const staff = isStaff();
+  const [statusLabel, statusColor] = STATUS[order.status];
+  const owner = staff ? ' · atas nama <b>' + escapeHtml(order.username) + '</b>' : '';
+  const payment = !staff && order.status === 'pending' ? orderPayBoxHtml(order) : '';
+  const remove = !staff && CLOSED_ORDER.includes(order.status)
+    ? `<button type="button" class="btn sm danger push" data-act="order-del" data-id="${order.id}">Hapus pesanan</button>` : '';
+
+  openModal(`<div data-order="${order.id}">
+    <h3>${escapeHtml(order.code)}</h3>
+    <div class="od-head"><span class="muted small">${formatDate(order.created_at)}${owner}</span><span class="stamp ${statusColor}">${statusLabel}</span></div>
+    ${timelineHtml(order.status)}
+    <ul class="r-lines">${order.items.map(orderLineHtml).join('')}${shippingLineHtml(order)}</ul>
+    <div class="r-total"><span>Total</span><strong class="num">${formatRupiah(order.total)}</strong></div>
+    ${orderInfoHtml(order)}${orderAutoCancelHtml(order)}${payment}
+    <div class="foot wrap"><button type="button" class="btn sm" data-act="close-modal">Tutup</button>${orderActions(order)}${remove}</div>
+  </div>`);
 }
 
 export function orderCards(animate = false) {
@@ -1007,7 +1042,7 @@ export const orderRailHtml = () =>
 function ordersView() {
   const customer = isCustomer();
   return `
-  <div class="page-head"><div><h2>${customer ? 'Pesanan saya' : 'Semua pesanan'}</h2><p class="muted">${customer ? 'Lihat status dan riwayat pesanan Anda.' : 'Konfirmasi pembayaran, kirim, dan selesaikan pesanan pelanggan.'}</p></div></div>
+  <div class="page-head"><div><h2>${customer ? 'Pesanan saya' : 'Semua pesanan'}</h2><p class="muted">${customer ? 'Lihat status dan riwayat pesanan Anda.' : 'Konfirmasi pembayaran, kirim, dan selesaikan pesanan pelanggan.'}</p></div>${customer && state.orders.some(o => CLOSED_ORDER.includes(o.status)) ? '<button type="button" class="btn sm" data-act="orders-clear">Bersihkan riwayat</button>' : ''}</div>
   <div class="rail" id="orail">${orderRailHtml()}</div>
   <div id="olist">${orderCards(state.fresh)}</div>`;
 }
