@@ -1136,6 +1136,22 @@ html.calm *,html.calm *::before,html.calm *::after{animation:none!important;tran
 .ew-opt input:checked+.ew-badge{opacity:1;outline:3px solid var(--blue-ring);outline-offset:2px;box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--blue)}
 .ew-opt input:focus-visible+.ew-badge{outline:3px solid var(--focus);outline-offset:3px}
 .ew-opt input:disabled+.ew-badge{opacity:.62}
+/* ---- Perbaikan responsif & UX e-wallet ---- */
+/* Hover hanya di perangkat dengan mouse; di layar sentuh tidak menempel */
+@media(hover:none){.ew-opt:hover .ew-badge{opacity:.8}}
+/* Tanda centang di pojok kartu terpilih, supaya pilihan tidak hanya mengandalkan warna */
+.ew-opt .ew-badge{position:relative}
+.ew-opt input:checked+.ew-badge::after{content:"";position:absolute;top:-7px;right:-7px;width:20px;height:20px;border-radius:50%;background:var(--blue) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2l2.4 2.4 4.6-5' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/12px no-repeat;box-shadow:0 0 0 2px var(--surface)}
+/* Tombol "Bayar dengan ..." selebar kotak di HP, mudah diketuk */
+.qris>a.btn{display:flex;align-items:center;justify-content:center;width:100%;max-width:340px;min-height:48px;margin:12px auto 0}
+/* HP sangat kecil: rapatkan kartu agar tiga logo tetap muat */
+@media(max-width:360px){
+  .ew-grid{gap:6px}
+  .ew-badge{padding:3px 8px;min-width:0}
+  .ew-badge img{height:20px}
+  .ew-dana.has-logo img{height:24px}
+  .ew-opt .ew-badge{min-height:48px}
+}
 .qris-qr{display:inline-block;background:#fff;border-radius:12px;padding:6px;border:1px solid var(--line);line-height:0}
 .qris-qr .qr-svg{width:min(220px,60vw);height:auto;display:block;image-rendering:pixelated}
 .qris-total{margin-top:12px;font-size:1.5rem;font-weight:700;color:var(--ink)}

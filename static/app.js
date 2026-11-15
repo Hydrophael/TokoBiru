@@ -498,7 +498,7 @@ function openCheckout() {
         ${freeHint}
         <div data-co-addr>${addressPickerHtml(addresses, picked)}</div>
         <div class="field"><label>Nama penerima</label><input class="input" name="recipient" required maxlength="50" autocomplete="name" value="${escapeHtml(start.recipient)}"></div>
-        <div class="field"><label>Nomor HP / WhatsApp</label><input class="input" name="phone" type="tel" inputmode="tel" required maxlength="20" placeholder="Contoh: 081234567890" autocomplete="tel" value="${escapeHtml(start.phone)}"></div>
+        <div class="field"><label>Nomor HP / WhatsApp</label><input class="input" name="phone" type="tel" inputmode="tel" required maxlength="20" placeholder="Contoh: 081234567890" autocomplete="tel" value="${escapeHtml(start.phone)}"><div class="muted small" data-co-phone-hint hidden style="margin-top:6px">Untuk OVO, isi dengan nomor HP yang terdaftar di aplikasi OVO.</div></div>
         <div data-co-addr>
           <div class="field"><label>Alamat pengiriman</label><textarea class="input" name="address" required minlength="5" maxlength="160" placeholder="Nama jalan, nomor, kota" autocomplete="street-address">${escapeHtml(start.address)}</textarea></div>
           ${saveAddressHtml(addresses)}
@@ -528,6 +528,8 @@ function updateCheckout(form) {
   $('[data-co-ewallet]', form).hidden = !isWallet;
   $$('input[name=ewallet_channel]', form).forEach(radio => { radio.disabled = !isWallet; });
   $$('[data-co-note]', form).forEach(el => { el.hidden = el.dataset.coNote !== payment; });
+  const phoneHint = $('[data-co-phone-hint]', form);
+  if (phoneHint) phoneHint.hidden = payment !== 'ewallet_ovo';
   $('button[type=submit]', form).textContent = `Buat pesanan (${total})`;
 }
 
