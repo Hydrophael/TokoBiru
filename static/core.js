@@ -171,6 +171,8 @@ export const state = {
   csrf: '',
   payInfo: '',
   dummyQris: false,
+  qrisMinutes: 60,
+  clockSkew: 0,
   shipping: { fee: 0, freeMin: 0 },
   resetEnabled: false,
   reset: null,
@@ -217,6 +219,13 @@ export const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch =>
 const formatNumber = amount => Number(amount || 0).toLocaleString('id-ID');
 const NBSP = '\u00a0';
 export const formatRupiah = amount => 'Rp' + NBSP + formatNumber(amount);
+
+// Sisa waktu dalam ms, memakai jam server (state.clockSkew diukur saat aplikasi dibuka)
+export const msLeft = iso => Date.parse(iso) - (Date.now() + state.clockSkew);
+export function countdownText(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+}
 export const priceHtml = amount => `<span class="price num"><small>Rp</small>${formatNumber(amount)}</span>`;
 
 const DATE_FORMAT = { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' };

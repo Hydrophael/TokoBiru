@@ -21,6 +21,7 @@ Environment variable
                   opsional: membuat akun master otomatis bila belum ada master
     PAY_INFO      opsional: instruksi pembayaran yang tampil di pesanan pelanggan
     PENDING_TTL_HOURS  opsional: batas jam bayar sebelum pesanan dibatalkan otomatis (default 24)
+    QRIS_TTL_MINUTES   opsional: batas menit bayar khusus QRIS (default 60)
     MAX_PENDING_ORDERS opsional: jumlah pesanan belum dibayar yang boleh dimiliki satu pelanggan (default 3)
     SHIPPING_FEE  opsional: ongkos kirim flat dalam rupiah (default 10000; 0 = gratis)
     FREE_SHIPPING_MIN  opsional: belanja minimal untuk gratis ongkir (default 0 = tidak ada)
@@ -127,6 +128,7 @@ def _env_int(name, default, minimum=1):
 
 
 PENDING_TTL_HOURS = _env_int("PENDING_TTL_HOURS", 24)
+QRIS_TTL_MINUTES = _env_int("QRIS_TTL_MINUTES", 60)
 LOG_RETENTION_DAYS = _env_int("LOG_RETENTION_DAYS", 90)
 MAX_PENDING_ORDERS = _env_int("MAX_PENDING_ORDERS", 3)
 SHIPPING_FEE = _env_int("SHIPPING_FEE", 10000, minimum=0)
@@ -708,7 +710,8 @@ def auth_me():
     if "csrf" not in session:
         session["csrf"] = secrets.token_urlsafe(32)
     return jsonify({"user": public_user(user), "csrf": session["csrf"], "pay_info": PAY_INFO,
-                    "dummy_qris": DUMMY_QRIS, "reset_enabled": EMAIL_ENABLED,
+                    "dummy_qris": DUMMY_QRIS, "qris_minutes": QRIS_TTL_MINUTES,
+                    "server_time": utcnow().isoformat() + "Z", "reset_enabled": EMAIL_ENABLED,
                     "shipping": {"fee": SHIPPING_FEE, "free_min": FREE_SHIPPING_MIN}})
 
 
@@ -1318,6 +1321,31 @@ def release_stock(db, reserved):
 _last_sweep = None
 
 
+def is_overdue(order):
+    expires = order.get("expires_at")
+    return bool(order.get("status") == "pending" and expires and expires <= utcnow())
+
+
+def cancel_expired_order(db, order):
+    # Atomik: hanya pesanan yang masih pending yang dibatalkan, stok dikembalikan sekali saja
+    result = db.orders.update_one(
+        {"_id": order["_id"], "status": "pending"},
+        {"$set": {"status": "cancelled", "cancel_reason": "expired", "updated_at": utcnow()}})
+    if result.modified_count != 1:
+        return False
+    release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
+    audit("pesanan_kedaluwarsa", order["code"], {"username": "sistem", "role": "-"})
+    return True
+
+
+def settle_overdue(db, order):
+    # Batas bayar dicek per pesanan agar hitung mundur di layar tepat, tidak menunggu penyapuan berkala
+    if order and is_overdue(order):
+        cancel_expired_order(db, order)
+        return db.orders.find_one({"_id": order["_id"]}) or order
+    return order
+
+
 def sweep_expired_orders(db, force=False):
     # Dijalankan malas saat ada request, karena serverless tidak punya proses latar belakang
     global _last_sweep
@@ -1328,18 +1356,16 @@ def sweep_expired_orders(db, force=False):
 
     cancelled = 0
     try:
-        cutoff = utcnow() - timedelta(hours=PENDING_TTL_HOURS)
+        now = utcnow()
+        cutoff = now - timedelta(hours=PENDING_TTL_HOURS)
+        # Batas bayar tiap pesanan ada di expires_at; created_at hanya cadangan untuk data lama
         stale = list(db.orders.find({"status": "pending", "payment_method": {"$ne": "cash"},
-                                     "created_at": {"$lt": cutoff}}).limit(EXPIRE_BATCH))
+                                     "$or": [{"expires_at": {"$lte": now}},
+                                             {"expires_at": {"$exists": False}, "created_at": {"$lt": cutoff}}]}
+                                    ).limit(EXPIRE_BATCH))
         for order in stale:
-            result = db.orders.update_one(
-                {"_id": order["_id"], "status": "pending"},
-                {"$set": {"status": "cancelled", "cancel_reason": "expired", "updated_at": utcnow()}})
-            if result.modified_count != 1:
-                continue
-            release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
-            audit("pesanan_kedaluwarsa", order["code"], {"username": "sistem", "role": "-"})
-            cancelled += 1
+            if cancel_expired_order(db, order):
+                cancelled += 1
     except PyMongoError as exc:
         app.logger.error("Penyapuan pesanan kedaluwarsa gagal: %s", exc)
     return cancelled
@@ -1469,7 +1495,7 @@ def orders_list():
     else:
         # Pesanan yang sudah dihapus pelanggan hanya disembunyikan; toko tetap menyimpannya untuk laporan
         docs = db.orders.find({"user_id": user["_id"], "hidden_by_user": {"$ne": True}}).sort("created_at", -1).limit(ORDERS_LIMIT)
-    return jsonify({"orders": [order_json(o, user) for o in docs]})
+    return jsonify({"orders": [order_json(settle_overdue(db, o), user) for o in docs]})
 
 
 @app.post("/api/orders")
@@ -1512,7 +1538,9 @@ def orders_create():
                  "phone": clean["phone"], "address": clean["address"], "note": clean["note"],
                  "recipient": clean["recipient"],
                  "status": "pending", "created_at": now, "updated_at": now}
-        if clean["payment_method"] != "cash":
+        if clean["payment_method"] == "qris":
+            order["expires_at"] = now + timedelta(minutes=QRIS_TTL_MINUTES)
+        elif clean["payment_method"] != "cash":
             order["expires_at"] = now + timedelta(hours=PENDING_TTL_HOURS)
         if key:
             order["idem_key"] = key
@@ -1602,6 +1630,7 @@ def qris_scan(token):
     order = db.orders.find_one({"pay_token": token})
     if not order:
         return missing()
+    order = settle_overdue(db, order)
     if order["status"] == "cancelled":
         return qris_page(False, "Pesanan dibatalkan",
                          [f"Pesanan {order['code']} sudah dibatalkan atau kedaluwarsa.", "Silakan buat pesanan baru."], 410)
@@ -1616,10 +1645,10 @@ def order_status_poll(order_id):
     db = get_db()
     sweep_expired_orders(db)
     user = current_user()
-    order = db.orders.find_one({"_id": object_id(order_id, "Pesanan")}, {"status": 1, "user_id": 1})
+    order = db.orders.find_one({"_id": object_id(order_id, "Pesanan")})
     if not order or (user["role"] == "user" and order["user_id"] != user["_id"]):
         raise ApiError("Pesanan tidak ditemukan", 404)
-    return jsonify({"status": order["status"]})
+    return jsonify({"status": settle_overdue(db, order)["status"]})
 
 
 @app.post("/api/orders/<order_id>/simulate-pay")
@@ -1632,6 +1661,7 @@ def order_simulate_pay(order_id):
     order = db.orders.find_one({"_id": object_id(order_id, "Pesanan")})
     if not order or order["user_id"] != user["_id"] or order.get("payment_method") != "qris":
         raise ApiError("Pesanan tidak ditemukan", 404)
+    order = settle_overdue(db, order)
     if order["status"] == "cancelled":
         raise ApiError("Pesanan sudah dibatalkan atau kedaluwarsa", 409)
     mark_order_paid(db, order, "qris")

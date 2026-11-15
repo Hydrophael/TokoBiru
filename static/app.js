@@ -27,7 +27,9 @@ import {
   state,
   stockInfo,
   storage,
-  tileVisualHtml
+  tileVisualHtml,
+  countdownText,
+  msLeft
 } from './core.js';
 import {
   animateDashboard,
@@ -479,7 +481,7 @@ function openCheckout() {
     ? `<div class="r-note" data-co-note="transfer">Bayar ke: <b>${escapeHtml(state.payInfo)}</b>. Pesanan diproses setelah admin mengonfirmasi pembayaran.</div>`
     : '';
   const cashNote = '<div class="r-note" data-co-note="cash" hidden>Bayar tunai saat pesanan diterima atau diambil. Siapkan uang pas bila bisa.</div>';
-  const qrisNote = '<div class="r-note" data-co-note="qris" hidden>Kode QRIS tampil setelah pesanan dibuat. Scan, dan pesanan langsung berstatus dibayar.</div>';
+  const qrisNote = `<div class="r-note" data-co-note="qris" hidden>Kode QRIS tampil setelah pesanan dibuat. Bayar dalam ${state.qrisMinutes} menit; setelah discan, pesanan langsung berstatus dibayar.</div>`;
 
   openModal(`<h3>Buat pesanan</h3><p class="sub">${lines.length} produk, total <b class="num" data-co-total>${formatRupiah(subtotal + fee)}</b></p>
       <ul class="sum">${summary}<li><span data-co-ship-label>Ongkos kirim</span><b class="num" data-co-ship>${fee ? formatRupiah(fee) : 'Gratis'}</b></li></ul>
@@ -642,6 +644,21 @@ function showQrisResult(id, status) {
       const fresh = $(`#modal-root [data-order="${id}"]`) && state.orders.find(item => item.id === id);
       if (fresh) orderDetailModal(fresh);
     }, 1600);
+  }
+}
+
+// Hitung mundur batas bayar: semua elemen [data-expires] diperbarui tiap detik
+let lastExpiredReload = 0;
+function tickTimers() {
+  for (const el of $$('[data-expires]')) {
+    const left = msLeft(el.dataset.expires);
+    el.textContent = countdownText(left);
+    el.classList.toggle('late', left < 5 * 60 * 1000);
+    if (left > 0 || el.dataset.done) continue;
+    el.dataset.done = '1';
+    // Waktu habis: server memastikan statusnya, lalu tampilan ikut berubah
+    if (el.closest('[data-qris]')) pollQris();
+    else if (state.view === 'orders' && Date.now() - lastExpiredReload > 5000) { lastExpiredReload = Date.now(); reload(); }
   }
 }
 
@@ -1574,12 +1591,15 @@ async function boot() {
   applySettings();
   bindEvents();
   setInterval(pollQris, QRIS_POLL_MS);
+  setInterval(tickTimers, 1000);
 
   try {
     const me = await api('/auth/me');
     state.csrf = me.csrf;
     state.payInfo = me.pay_info || '';
     state.dummyQris = Boolean(me.dummy_qris);
+    state.qrisMinutes = Number(me.qris_minutes) || 60;
+    if (me.server_time) state.clockSkew = Date.parse(me.server_time) - Date.now();
     state.shipping = { fee: Number(me.shipping?.fee) || 0, freeMin: Number(me.shipping?.free_min) || 0 };
     state.resetEnabled = Boolean(me.reset_enabled);
 

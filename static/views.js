@@ -43,6 +43,8 @@ import {
   productGroupCount,
   PAYMENT_LABEL,
   SHIPPING_LABEL,
+  countdownText,
+  msLeft,
 } from './core.js';
 import { qrSvg } from './qr.js';
 import { EASE, burst, linkLabels, openModal, reducedMotion, toast, tweenNumber } from './ui.js';
@@ -70,7 +72,8 @@ export const qrisPaidHtml = () =>
 export function qrisBoxHtml(order) {
   if (!order.pay_path) return '';
   const url = location.origin + order.pay_path;
-  const deadline = order.expires_at ? `<span class="qris-limit">Bayar sebelum <b>${formatDate(order.expires_at)}</b></span>` : '';
+  const deadline = order.expires_at
+    ? `<span class="qris-limit">Bayar dalam <b class="qris-timer" data-expires="${escapeHtml(order.expires_at)}">${countdownText(msLeft(order.expires_at))}</b></span>` : '';
   return `<section class="qris" data-qris="${escapeHtml(order.id)}" aria-label="Bayar dengan QRIS">
     <div class="qris-head"><b class="qris-logo">QRIS</b><span>TokoBiru</span></div>
     <div class="qris-qr">${qrSvg(url)}</div>
@@ -986,7 +989,9 @@ function orderCardHtml(order, staff, index = 0) {
   const justUpdated = order.id === state.justUpdatedOrderId ? ' just' : '';
   const owner = staff ? ', atas nama <b>' + escapeHtml(order.username) + '</b>' : '';
   const hint = !staff && order.status === 'pending' && order.payment_method !== 'cash'
-    ? '<p class="r-hint">Belum dibayar. Buka untuk bayar.</p>' : '';
+    ? (order.payment_method === 'qris' && order.expires_at
+      ? `<p class="r-hint">Bayar dalam <b class="qris-timer" data-expires="${escapeHtml(order.expires_at)}">${countdownText(msLeft(order.expires_at))}</b></p>`
+      : '<p class="r-hint">Belum dibayar. Buka untuk bayar.</p>') : '';
   const acts = staff ? orderActions(order) : '';
 
   return `

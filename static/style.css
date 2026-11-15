@@ -1146,3 +1146,8 @@ html.calm *,html.calm *::before,html.calm *::after{animation:none!important;tran
 .od-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px}
 .modal .foot.wrap{flex-wrap:wrap}
 .modal .foot .btn.push{order:-1;margin-right:auto}
+
+/* Hitung mundur bayar */
+.qris-timer{font-variant-numeric:tabular-nums}
+.qris-limit .qris-timer{font-size:1.05rem;color:var(--ink)}
+.qris-timer.late{color:var(--err)}
