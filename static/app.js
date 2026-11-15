@@ -645,7 +645,7 @@ async function changeOrderStatus(el) {
   }
 }
 
-const QRIS_POLL_MS = 2500;
+const QRIS_POLL_MS = 1500;
 let qrisBusy = false;
 
 function showQrisResult(id, status) {
@@ -1631,11 +1631,11 @@ async function handlePayReturn() {
 // Kabar lunas dari e-wallet bisa tiba beberapa detik setelah pelanggan kembali: segarkan daftar sampai tidak ada yang menunggu
 async function watchPayReturn() {
   const waiting = () => state.orders.some(order => order.status === 'pending' && isEwallet(order.payment_method));
-  for (let attempt = 0; attempt < 10 && waiting(); attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 3000));
+  for (let attempt = 0; attempt < 20 && waiting(); attempt++) {
     if (state.view !== 'orders') return;
-    if ($('#modal-root').firstChild) continue;
-    await reload();
+    if (!$('#modal-root').firstChild) await reload();
+    if (!waiting()) return;
+    await new Promise(resolve => setTimeout(resolve, 1500));
   }
 }
 
@@ -1646,6 +1646,8 @@ async function boot() {
   applySettings();
   bindEvents();
   setInterval(pollQris, QRIS_POLL_MS);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) pollQris(); });
+  addEventListener('pageshow', () => pollQris());
   setInterval(tickTimers, 1000);
 
   try {

@@ -1774,6 +1774,34 @@ def qris_scan(token):
     return qris_page(True, "Pembayaran berhasil", [format_rupiah(order["total"]), f"Pesanan {order['code']}"])
 
 
+_last_ewallet_sync = {}
+
+
+def sync_ewallet_status(db, order):
+    # Cadangan bila webhook telat/hilang: tanya langsung ke Xendit, paling sering sekali per 3 detik per pesanan
+    if order["status"] != "pending" or not order.get("ewallet_id") or not XENDIT_ENABLED:
+        return order
+    now_ts = time.monotonic()
+    if now_ts - _last_ewallet_sync.get(order["_id"], 0) < 3:
+        return order
+    if len(_last_ewallet_sync) > 500:
+        _last_ewallet_sync.clear()
+    _last_ewallet_sync[order["_id"]] = now_ts
+    try:
+        charge = xendit_request("GET", f"/ewallets/charges/{order['ewallet_id']}", timeout=3, version=None)
+    except GatewayError:
+        return order
+    status = str(charge.get("status", "")).upper()
+    amount = charge.get("charge_amount")
+    if status in XENDIT_PAID_STATUS and isinstance(amount, (int, float)) and amount == order["total"]:
+        mark_order_paid(db, order, "xendit", XENDIT_ACTOR)
+    elif status == "FAILED":
+        cancel_expired_order(db, order, "payment_failed", "pesanan_bayar_gagal")
+    else:
+        return order
+    return db.orders.find_one({"_id": order["_id"]}) or order
+
+
 @app.get("/api/orders/<order_id>/status")
 @login_required
 def order_status_poll(order_id):
@@ -1783,7 +1811,8 @@ def order_status_poll(order_id):
     order = db.orders.find_one({"_id": object_id(order_id, "Pesanan")})
     if not order or (user["role"] == "user" and order["user_id"] != user["_id"]):
         raise ApiError("Pesanan tidak ditemukan", 404)
-    return jsonify({"status": settle_overdue(db, order)["status"]})
+    order = sync_ewallet_status(db, settle_overdue(db, order))
+    return jsonify({"status": order["status"]})
 
 
 @app.post("/api/orders/<order_id>/simulate-pay")
