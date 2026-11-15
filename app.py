@@ -22,6 +22,9 @@ Environment variable
     PAY_INFO      opsional: instruksi pembayaran yang tampil di pesanan pelanggan
     PENDING_TTL_HOURS  opsional: batas jam bayar sebelum pesanan dibatalkan otomatis (default 24)
     QRIS_TTL_MINUTES   opsional: batas menit bayar khusus QRIS (default 60)
+    XENDIT_SECRET_KEY      opsional: API key Xendit (xnd_development_... untuk uji, xnd_production_... untuk live).
+                           Bila diisi bersama XENDIT_CALLBACK_TOKEN, QRIS asli aktif dan DUMMY_QRIS otomatis mati.
+    XENDIT_CALLBACK_TOKEN  token verifikasi webhook (Dashboard Xendit > Settings > Webhooks). URL webhook: /webhooks/xendit
     MAX_PENDING_ORDERS opsional: jumlah pesanan belum dibayar yang boleh dimiliki satu pelanggan (default 3)
     SHIPPING_FEE  opsional: ongkos kirim flat dalam rupiah (default 10000; 0 = gratis)
     FREE_SHIPPING_MIN  opsional: belanja minimal untuk gratis ongkir (default 0 = tidak ada)
@@ -34,6 +37,7 @@ import base64
 import getpass
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -42,6 +46,8 @@ import ssl
 import sys
 import time
 import unicodedata
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import make_msgid
@@ -74,8 +80,16 @@ def _env_str(name, default="", strip=True):
 
 
 PAY_INFO = _env_str("PAY_INFO")[:200]
-# Hanya untuk demo: pelanggan bisa melunasi pesanannya sendiri tanpa uang
-DUMMY_QRIS = _env_str("DUMMY_QRIS").lower() in ("1", "true", "ya", "on")
+# QRIS asli lewat Xendit. Bila key diisi, QRIS simulasi dimatikan supaya tidak ada jalan pintas "bayar gratis".
+XENDIT_SECRET_KEY = _env_str("XENDIT_SECRET_KEY")
+XENDIT_CALLBACK_TOKEN = _env_str("XENDIT_CALLBACK_TOKEN")
+XENDIT_API_URL = "https://api.xendit.co"
+XENDIT_API_VERSION = "2022-07-31"
+XENDIT_ENABLED = bool(XENDIT_SECRET_KEY and XENDIT_CALLBACK_TOKEN)
+XENDIT_TEST_MODE = XENDIT_SECRET_KEY.startswith("xnd_development")
+# Hanya untuk demo lokal: pelanggan bisa melunasi pesanannya sendiri tanpa uang
+DUMMY_QRIS = _env_str("DUMMY_QRIS").lower() in ("1", "true", "ya", "on") and not XENDIT_SECRET_KEY
+QRIS_ENABLED = XENDIT_ENABLED or DUMMY_QRIS
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 
@@ -134,7 +148,7 @@ MAX_PENDING_ORDERS = _env_int("MAX_PENDING_ORDERS", 3)
 SHIPPING_FEE = _env_int("SHIPPING_FEE", 10000, minimum=0)
 FREE_SHIPPING_MIN = _env_int("FREE_SHIPPING_MIN", 0, minimum=0)
 SHIPPING_METHODS = ("delivery", "pickup")
-PAYMENT_METHODS = ("transfer", "cash") + (("qris",) if DUMMY_QRIS else ())
+PAYMENT_METHODS = ("transfer", "cash") + (("qris",) if QRIS_ENABLED else ())
 EXPIRE_SWEEP_SECONDS = 60
 EXPIRE_BATCH = 50
 MAX_QTY_PER_PRODUCT = 99
@@ -466,7 +480,7 @@ def object_id(value, label="ID"):
     return ObjectId(value)
 
 
-HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key", "session_version", "pay_token",
+HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key", "session_version", "pay_token", "qr_id", "qr_string",
                  "reset_code_hash", "reset_expires", "reset_sent_at", "reset_failed", "reset_locked_until",
                  "image", "image_type", "image_v",
                  "addresses", "hidden_by_user", "hidden_at")
@@ -499,11 +513,14 @@ def serialize(doc):
 
 
 def order_json(order, user=None):
-    # Tautan bayar hanya untuk pemilik, selama pesanan masih menunggu bayar
+    # Tautan bayar dan kode QRIS hanya untuk pemilik, selama pesanan masih menunggu bayar
     out = serialize(order)
-    if (order.get("pay_token") and order.get("status") == "pending"
-            and user and user["role"] == "user" and user["_id"] == order.get("user_id")):
+    owner_pending = bool(order.get("status") == "pending"
+                         and user and user["role"] == "user" and user["_id"] == order.get("user_id"))
+    if owner_pending and order.get("pay_token"):
         out["pay_path"] = f"/pay/{order['pay_token']}"
+    if owner_pending and order.get("qr_string"):
+        out["qr_string"] = order["qr_string"]
     return out
 
 
@@ -710,7 +727,7 @@ def auth_me():
     if "csrf" not in session:
         session["csrf"] = secrets.token_urlsafe(32)
     return jsonify({"user": public_user(user), "csrf": session["csrf"], "pay_info": PAY_INFO,
-                    "dummy_qris": DUMMY_QRIS, "qris_minutes": QRIS_TTL_MINUTES,
+                    "dummy_qris": DUMMY_QRIS, "qris_enabled": QRIS_ENABLED, "qris_minutes": QRIS_TTL_MINUTES,
                     "server_time": utcnow().isoformat() + "Z", "reset_enabled": EMAIL_ENABLED,
                     "shipping": {"fee": SHIPPING_FEE, "free_min": FREE_SHIPPING_MIN}})
 
@@ -1481,6 +1498,47 @@ def enforce_pending_limit(db, user):
         )
 
 
+class GatewayError(Exception):
+    pass
+
+
+def xendit_request(method, path, body=None, timeout=8):
+    # Pakai urllib bawaan Python supaya tidak menambah dependensi. Key tidak pernah ditulis ke log.
+    token = base64.b64encode(f"{XENDIT_SECRET_KEY}:".encode()).decode()
+    request_ = urllib.request.Request(
+        XENDIT_API_URL + path, method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Authorization": "Basic " + token, "Content-Type": "application/json",
+                 "api-version": XENDIT_API_VERSION})
+    try:
+        with urllib.request.urlopen(request_, timeout=timeout) as resp:
+            return json.loads(resp.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        app.logger.error("Xendit %s %s -> HTTP %s %s", method, path, exc.code, exc.read().decode(errors="replace")[:300])
+        raise GatewayError(f"HTTP {exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        app.logger.error("Xendit %s %s gagal: %s", method, path, exc)
+        raise GatewayError(str(exc)) from exc
+
+
+def create_xendit_qr(order):
+    # reference_id = kode pesanan (unik); nominal dan batas waktu diambil dari pesanan di server
+    result = xendit_request("POST", "/qr_codes", {
+        "reference_id": order["code"], "type": "DYNAMIC", "currency": "IDR", "amount": order["total"],
+        "expires_at": order["expires_at"].replace(microsecond=0).isoformat() + "Z"})
+    qr_id, qr_string = result.get("id"), result.get("qr_string")
+    if not qr_id or not qr_string:
+        raise GatewayError("respons Xendit tidak lengkap")
+    return qr_id, qr_string
+
+
+def drop_unpayable_order(db, order):
+    # Pesanan dihapus (bukan dibatalkan) supaya percobaan ulang dengan Idempotency-Key yang sama tidak mengembalikan pesanan mati
+    if db.orders.delete_one({"_id": order["_id"], "status": "pending"}).deleted_count:
+        release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
+        audit("pesanan_gagal_gateway", order["code"], {"username": "sistem", "role": "-"})
+
+
 @app.get("/api/orders")
 @login_required
 def orders_list():
@@ -1553,6 +1611,14 @@ def orders_create():
     except Exception:
         release_stock(db, reserved)
         raise
+    if clean["payment_method"] == "qris" and XENDIT_ENABLED:
+        try:
+            qr_id, qr_string = create_xendit_qr(order)
+        except GatewayError:
+            drop_unpayable_order(db, order)
+            raise ApiError("QRIS sedang tidak bisa dibuat. Coba lagi sebentar lagi atau pilih metode lain.", 502)
+        db.orders.update_one({"_id": order["_id"]}, {"$set": {"qr_id": qr_id, "qr_string": qr_string}})
+        order.update(qr_id=qr_id, qr_string=qr_string)
     audit("pesanan_buat", f"{order['code']} total {order['total']}")
     return jsonify({"order": order_json(order, user)}), 201
 
@@ -1666,6 +1732,53 @@ def order_simulate_pay(order_id):
         raise ApiError("Pesanan sudah dibatalkan atau kedaluwarsa", 409)
     mark_order_paid(db, order, "qris")
     return jsonify({"order": order_json(db.orders.find_one({"_id": order["_id"]}), user)})
+
+
+XENDIT_PAID_STATUS = ("SUCCEEDED", "COMPLETED")
+XENDIT_ACTOR = {"username": "xendit", "role": "-"}
+
+
+@app.post("/webhooks/xendit")
+def xendit_webhook():
+    # Di luar /api/ karena dipanggil server Xendit (tanpa sesi dan token CSRF); keasliannya dibuktikan oleh x-callback-token
+    if not XENDIT_ENABLED:
+        return jsonify({"error": "tidak aktif"}), 404
+    sent = request.headers.get("x-callback-token", "")
+    if not secrets.compare_digest(sent.encode(), XENDIT_CALLBACK_TOKEN.encode()):
+        app.logger.warning("Webhook Xendit ditolak: token salah dari %s", client_ip())
+        return jsonify({"error": "token tidak valid"}), 401
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "format tidak valid"}), 400
+
+    event = payload.get("event")
+    data = payload["data"] if isinstance(payload.get("data"), dict) else payload
+    reference, qr_id, amount = data.get("reference_id"), data.get("qr_id"), data.get("amount")
+    paid = str(data.get("status", "")).upper() in XENDIT_PAID_STATUS
+    # Event lain (mis. refund) dan status selain lunas diabaikan; 200 supaya Xendit tidak mengirim ulang
+    if (event and event != "qr.payment") or not paid or not isinstance(reference, str):
+        return jsonify({"ok": True, "ignored": True}), 200
+
+    db = get_db()
+    order = db.orders.find_one({"code": reference, "payment_method": "qris"})
+    if not order:
+        audit("pembayaran_tak_dikenal", reference[:40], XENDIT_ACTOR)
+        return jsonify({"ok": True, "ignored": True}), 200
+
+    amount_ok = isinstance(amount, (int, float)) and not isinstance(amount, bool) and amount == order["total"]
+    qr_ok = not (order.get("qr_id") and qr_id and qr_id != order["qr_id"])
+    if not amount_ok or not qr_ok:
+        db.orders.update_one({"_id": order["_id"]}, {"$set": {"payment_issue": "mismatch", "updated_at": utcnow()}})
+        audit("pembayaran_tidak_cocok", f"{order['code']} nominal {amount} vs {order['total']}", XENDIT_ACTOR)
+        return jsonify({"ok": True, "ignored": True}), 200
+
+    if order["status"] == "pending":
+        mark_order_paid(db, order, "xendit", XENDIT_ACTOR)
+    elif order["status"] == "cancelled":
+        # Uang masuk setelah pesanan dibatalkan/kedaluwarsa: stok sudah dilepas, jadi ditandai untuk refund manual
+        db.orders.update_one({"_id": order["_id"]}, {"$set": {"needs_refund": True, "updated_at": utcnow()}})
+        audit("pembayaran_terlambat", f"{order['code']} dibayar setelah dibatalkan, perlu refund", XENDIT_ACTOR)
+    return jsonify({"ok": True})
 
 
 @app.delete("/api/orders/<order_id>")

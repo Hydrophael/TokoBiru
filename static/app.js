@@ -481,7 +481,7 @@ function openCheckout() {
     ? `<div class="r-note" data-co-note="transfer">Bayar ke: <b>${escapeHtml(state.payInfo)}</b>. Pesanan diproses setelah admin mengonfirmasi pembayaran.</div>`
     : '';
   const cashNote = '<div class="r-note" data-co-note="cash" hidden>Bayar tunai saat pesanan diterima atau diambil. Siapkan uang pas bila bisa.</div>';
-  const qrisNote = `<div class="r-note" data-co-note="qris" hidden>Kode QRIS tampil setelah pesanan dibuat. Bayar dalam ${state.qrisMinutes} menit; setelah discan, pesanan langsung berstatus dibayar.</div>`;
+  const qrisNote = `<div class="r-note" data-co-note="qris" hidden>Kode QRIS tampil setelah pesanan dibuat. Bayar dalam ${state.qrisMinutes} menit; begitu pembayaran diterima, status pesanan otomatis menjadi dibayar.</div>`;
 
   openModal(`<h3>Buat pesanan</h3><p class="sub">${lines.length} produk, total <b class="num" data-co-total>${formatRupiah(subtotal + fee)}</b></p>
       <ul class="sum">${summary}<li><span data-co-ship-label>Ongkos kirim</span><b class="num" data-co-ship>${fee ? formatRupiah(fee) : 'Gratis'}</b></li></ul>
@@ -1597,7 +1597,7 @@ async function boot() {
     const me = await api('/auth/me');
     state.csrf = me.csrf;
     state.payInfo = me.pay_info || '';
-    state.dummyQris = Boolean(me.dummy_qris);
+    state.dummyQris = Boolean(me.qris_enabled ?? me.dummy_qris);   // nama lama; artinya "QRIS tersedia" (Xendit atau simulasi)
     state.qrisMinutes = Number(me.qris_minutes) || 60;
     if (me.server_time) state.clockSkew = Date.parse(me.server_time) - Date.now();
     state.shipping = { fee: Number(me.shipping?.fee) || 0, freeMin: Number(me.shipping?.free_min) || 0 };

@@ -70,15 +70,15 @@ export const qrisPaidHtml = () =>
 
 // QR berisi tautan bayar; setelah discan, app.js mengganti kotak ini menjadi centang
 export function qrisBoxHtml(order) {
-  if (!order.pay_path) return '';
-  const url = location.origin + order.pay_path;
+  const payload = order.qr_string || (order.pay_path ? location.origin + order.pay_path : '');
+  if (!payload) return '';
   const deadline = order.expires_at
     ? `<span class="qris-limit">Bayar dalam <b class="qris-timer" data-expires="${escapeHtml(order.expires_at)}">${countdownText(msLeft(order.expires_at))}</b></span>` : '';
   return `<section class="qris" data-qris="${escapeHtml(order.id)}" aria-label="Bayar dengan QRIS">
     <div class="qris-head"><b class="qris-logo">QRIS</b><span>TokoBiru</span></div>
-    <div class="qris-qr">${qrSvg(url)}</div>
+    <div class="qris-qr">${qrSvg(payload)}</div>
     <div class="qris-total num">${formatRupiah(order.total)}</div>
-    <p class="qris-hint">Scan kode ini dengan kamera HP. Pesanan langsung berstatus dibayar.</p>
+    <p class="qris-hint">${order.qr_string ? 'Scan dengan GoPay, OVO, DANA, ShopeePay, atau m-banking yang mendukung QRIS. Status berubah otomatis setelah dibayar.' : 'Scan kode ini dengan kamera HP. Pesanan langsung berstatus dibayar.'}</p>
     ${deadline}
   </section>`;
 }
