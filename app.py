@@ -87,6 +87,8 @@ XENDIT_API_URL = "https://api.xendit.co"
 XENDIT_API_VERSION = "2022-07-31"
 XENDIT_ENABLED = bool(XENDIT_SECRET_KEY and XENDIT_CALLBACK_TOKEN)
 XENDIT_TEST_MODE = XENDIT_SECRET_KEY.startswith("xnd_development")
+# Hanya di sandbox: QR berisi tautan /pay/<token>; saat discan, server menyuruh Xendit mensimulasikan pembayaran
+XENDIT_SIMULATE_SCAN = XENDIT_ENABLED and XENDIT_TEST_MODE
 # Hanya untuk demo lokal: pelanggan bisa melunasi pesanannya sendiri tanpa uang
 DUMMY_QRIS = _env_str("DUMMY_QRIS").lower() in ("1", "true", "ya", "on") and not XENDIT_SECRET_KEY
 QRIS_ENABLED = XENDIT_ENABLED or DUMMY_QRIS
@@ -519,7 +521,7 @@ def order_json(order, user=None):
                          and user and user["role"] == "user" and user["_id"] == order.get("user_id"))
     if owner_pending and order.get("pay_token"):
         out["pay_path"] = f"/pay/{order['pay_token']}"
-    if owner_pending and order.get("qr_string"):
+    if owner_pending and order.get("qr_string") and not XENDIT_SIMULATE_SCAN:
         out["qr_string"] = order["qr_string"]
     return out
 
@@ -1690,7 +1692,7 @@ def qris_page(ok, title, lines, status=200):
 def qris_scan(token):
     # Tanpa login: token acak di tautan inilah yang membuktikan pemilik pesanan
     missing = lambda: qris_page(False, "Tautan tidak ditemukan", ["Kode QR ini tidak berlaku."], 404)
-    if not DUMMY_QRIS or not PAY_TOKEN_RE.fullmatch(token):
+    if not (DUMMY_QRIS or XENDIT_SIMULATE_SCAN) or not PAY_TOKEN_RE.fullmatch(token):
         return missing()
     db = get_db()
     order = db.orders.find_one({"pay_token": token})
@@ -1701,7 +1703,13 @@ def qris_scan(token):
         return qris_page(False, "Pesanan dibatalkan",
                          [f"Pesanan {order['code']} sudah dibatalkan atau kedaluwarsa.", "Silakan buat pesanan baru."], 410)
     if order["status"] == "pending":
-        mark_order_paid(db, order, "qris", QRIS_ACTOR)
+        if XENDIT_SIMULATE_SCAN and order.get("qr_id"):
+            try:
+                xendit_request("POST", f"/qr_codes/{order['qr_id']}/payments/simulate",
+                               {"amount": order["total"]})
+            except GatewayError:
+                return qris_page(False, "Simulasi gagal", ["Xendit tidak merespons. Coba scan lagi."], 502)
+        mark_order_paid(db, order, "xendit" if XENDIT_SIMULATE_SCAN else "qris", QRIS_ACTOR)
     return qris_page(True, "Pembayaran berhasil", [format_rupiah(order["total"]), f"Pesanan {order['code']}"])
 
 
