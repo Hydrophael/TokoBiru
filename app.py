@@ -1831,6 +1831,8 @@ def xendit_webhook():
     failed = is_ewallet and status == "FAILED"
     # Event lain (mis. refund) dan status selain lunas diabaikan; 200 supaya Xendit tidak mengirim ulang
     if (event and event not in ("qr.payment", "ewallet.capture")) or not (paid or failed) or not isinstance(reference, str):
+        # Token sudah terbukti benar di atas, jadi aman dicatat (bukan lalu lintas liar); membantu melacak notifikasi yang tidak melunasi
+        audit("webhook_diabaikan", f"{event or '-'} {status or '-'} {str(reference)[:40]}", XENDIT_ACTOR)
         return jsonify({"ok": True, "ignored": True}), 200
 
     db = get_db()
