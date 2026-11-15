@@ -1575,9 +1575,12 @@ def create_xendit_ewallet(order, method):
         version=None)
     charge_id = result.get("id")
     actions = result.get("actions") if isinstance(result.get("actions"), dict) else {}
-    url = actions.get("mobile_web_checkout_url") or actions.get("desktop_web_checkout_url") or ""
+    # DANA memberi tautan web; ShopeePay hanya memberi tautan aplikasi (deeplink); OVO tidak memberi tautan sama sekali
+    url = (actions.get("mobile_web_checkout_url") or actions.get("desktop_web_checkout_url")
+           or actions.get("mobile_deeplink_checkout_url") or "")
     if not charge_id or (channel != "ID_OVO" and not url):
-        raise GatewayError("respons Xendit tidak lengkap")
+        given = ",".join(key for key, value in actions.items() if value) or "kosong"
+        raise GatewayError(f"respons Xendit tidak lengkap ({channel}, id {'ada' if charge_id else 'tidak ada'}, tautan: {given})")
     return charge_id, url
 
 
