@@ -629,6 +629,8 @@ function showQrisResult(id, status) {
       box.classList.add('paid');
       burst($('.done-ic', box));
     }
+    // Setelah pembayaran selesai atau dibatalkan, ajakan "bayar" di modal sukses tidak relevan lagi
+    box.closest('.modal')?.querySelector('.done .sub')?.remove();
     box.removeAttribute('data-qris');
   }
   const order = state.orders.find(item => item.id === id);
@@ -661,17 +663,6 @@ async function pollQris() {
     }
   } finally {
     qrisBusy = false;
-  }
-}
-
-async function simulateQrisScan(el) {
-  el.disabled = true;
-  try {
-    const { order } = await api(`/orders/${el.dataset.id}/simulate-pay`, { method: 'POST', body: {} });
-    showQrisResult(order.id, order.status);
-  } catch (err) {
-    el.disabled = false;
-    toast(err.message, 'err');
   }
 }
 
@@ -1057,7 +1048,6 @@ const actions = {
   checkout: openCheckout,
   ofilter: filterOrders,
   copy: copyToClipboard,
-  'qris-sim': simulateQrisScan,
   'order-open': openOrder,
   'order-del': deleteOrder,
   'orders-clear': clearOrderHistory,

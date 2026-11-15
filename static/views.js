@@ -77,7 +77,6 @@ export function qrisBoxHtml(order) {
     <div class="qris-total num">${formatRupiah(order.total)}</div>
     <p class="qris-hint">Scan kode ini dengan kamera HP. Pesanan langsung berstatus dibayar.</p>
     ${deadline}
-    <button type="button" class="btn sm" data-act="qris-sim" data-id="${escapeHtml(order.id)}">Bayar sekarang</button>
   </section>`;
 }
 
