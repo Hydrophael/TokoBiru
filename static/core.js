@@ -103,8 +103,22 @@ export const MAX_CART_QTY = 99;
 
 export const SHIPPING_LABEL = { delivery: 'Antar ke alamat', pickup: 'Ambil di toko' };
 // Kode harus sama dengan PAYMENT_METHODS di app.py
-export const PAYMENT_LABEL = { transfer: 'Transfer bank', cash: 'Bayar tunai', qris: 'QRIS' };
-export const paymentChoices = () => Object.fromEntries(Object.entries(PAYMENT_LABEL).filter(([code]) => code !== 'qris' || state.dummyQris));
+export const PAYMENT_LABEL = {
+  transfer: 'Transfer bank', cash: 'Bayar tunai', qris: 'QRIS',
+  ewallet_dana: 'DANA', ewallet_shopeepay: 'ShopeePay', ewallet_ovo: 'OVO'
+};
+export const isEwallet = method => String(method).startsWith('ewallet_');
+// Di form checkout, DANA/ShopeePay/OVO digabung jadi satu pilihan "E-Wallet"; pilihan rincinya muncul setelah itu
+export const EWALLET_GROUP = 'ewallet';
+export const ewalletChoices = () => Object.fromEntries(Object.entries(PAYMENT_LABEL).filter(([code]) => isEwallet(code)));
+export const paymentChoices = () => {
+  const choices = Object.fromEntries(Object.entries(PAYMENT_LABEL).filter(([code]) =>
+    !isEwallet(code) && (code !== 'qris' || state.dummyQris)));
+  if (state.ewalletOn) choices[EWALLET_GROUP] = 'E-Wallet';
+  return choices;
+};
+// Kode metode yang dikirim ke server: bila memilih E-Wallet, pakai kanal yang dipilih (mis. ewallet_dana)
+export const chosenPayment = data => data.payment_method === EWALLET_GROUP ? (data.ewallet_channel || '') : data.payment_method;
 
 // Aturan sama dengan shipping_fee_for() di app.py; total akhir tetap dihitung server
 export function shippingFeeFor(subtotal, method) {
@@ -171,7 +185,9 @@ export const state = {
   csrf: '',
   payInfo: '',
   dummyQris: false,
+  ewalletOn: false,
   qrisMinutes: 60,
+  ewalletMinutes: {},
   clockSkew: 0,
   shipping: { fee: 0, freeMin: 0 },
   resetEnabled: false,

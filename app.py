@@ -145,12 +145,24 @@ def _env_int(name, default, minimum=1):
 
 PENDING_TTL_HOURS = _env_int("PENDING_TTL_HOURS", 24)
 QRIS_TTL_MINUTES = _env_int("QRIS_TTL_MINUTES", 60)
+# Batas bayar tiap e-wallet (menit). Idealnya tidak lebih pendek dari umur tagihan di Xendit (ShopeePay 30 menit, DANA 24 jam),
+# supaya tidak ada pembayaran masuk ke pesanan yang sudah dibatalkan. OVO mengabari Xendit saat tagihannya habis.
+EWALLET_TTL_MINUTES = {
+    "ewallet_dana": _env_int("DANA_TTL_MINUTES", 60),
+    "ewallet_shopeepay": _env_int("SHOPEEPAY_TTL_MINUTES", 30),
+    "ewallet_ovo": _env_int("OVO_TTL_MINUTES", 15),
+}
+# Alamat publik toko (mis. https://tokobiru.vercel.app): dipakai untuk tautan kembali dari e-wallet
+PUBLIC_URL = _env_str("PUBLIC_URL").rstrip("/")
 LOG_RETENTION_DAYS = _env_int("LOG_RETENTION_DAYS", 90)
 MAX_PENDING_ORDERS = _env_int("MAX_PENDING_ORDERS", 3)
 SHIPPING_FEE = _env_int("SHIPPING_FEE", 10000, minimum=0)
 FREE_SHIPPING_MIN = _env_int("FREE_SHIPPING_MIN", 0, minimum=0)
 SHIPPING_METHODS = ("delivery", "pickup")
-PAYMENT_METHODS = ("transfer", "cash") + (("qris",) if QRIS_ENABLED else ())
+# E-wallet lewat Xendit: kode metode di toko -> kode kanal di Xendit
+EWALLET_CHANNELS = {"ewallet_dana": "ID_DANA", "ewallet_shopeepay": "ID_SHOPEEPAY", "ewallet_ovo": "ID_OVO"}
+PAYMENT_METHODS = (("transfer", "cash") + (("qris",) if QRIS_ENABLED else ())
+                   + (tuple(EWALLET_CHANNELS) if XENDIT_ENABLED else ()))
 EXPIRE_SWEEP_SECONDS = 60
 EXPIRE_BATCH = 50
 MAX_QTY_PER_PRODUCT = 99
@@ -483,6 +495,7 @@ def object_id(value, label="ID"):
 
 
 HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key", "session_version", "pay_token", "qr_id", "qr_string",
+                 "ewallet_id", "ewallet_url",
                  "reset_code_hash", "reset_expires", "reset_sent_at", "reset_failed", "reset_locked_until",
                  "image", "image_type", "image_v",
                  "addresses", "hidden_by_user", "hidden_at")
@@ -523,6 +536,8 @@ def order_json(order, user=None):
         out["pay_path"] = f"/pay/{order['pay_token']}"
     if owner_pending and order.get("qr_string") and not XENDIT_SIMULATE_SCAN:
         out["qr_string"] = order["qr_string"]
+    if owner_pending and order.get("ewallet_url"):
+        out["ewallet_url"] = order["ewallet_url"]
     return out
 
 
@@ -729,7 +744,8 @@ def auth_me():
     if "csrf" not in session:
         session["csrf"] = secrets.token_urlsafe(32)
     return jsonify({"user": public_user(user), "csrf": session["csrf"], "pay_info": PAY_INFO,
-                    "dummy_qris": DUMMY_QRIS, "qris_enabled": QRIS_ENABLED, "qris_minutes": QRIS_TTL_MINUTES,
+                    "dummy_qris": DUMMY_QRIS, "qris_enabled": QRIS_ENABLED, "ewallet_enabled": XENDIT_ENABLED, "qris_minutes": QRIS_TTL_MINUTES,
+                    "ewallet_minutes": EWALLET_TTL_MINUTES,
                     "server_time": utcnow().isoformat() + "Z", "reset_enabled": EMAIL_ENABLED,
                     "shipping": {"fee": SHIPPING_FEE, "free_min": FREE_SHIPPING_MIN}})
 
@@ -1345,15 +1361,15 @@ def is_overdue(order):
     return bool(order.get("status") == "pending" and expires and expires <= utcnow())
 
 
-def cancel_expired_order(db, order):
+def cancel_expired_order(db, order, reason="expired", audit_action="pesanan_kedaluwarsa"):
     # Atomik: hanya pesanan yang masih pending yang dibatalkan, stok dikembalikan sekali saja
     result = db.orders.update_one(
         {"_id": order["_id"], "status": "pending"},
-        {"$set": {"status": "cancelled", "cancel_reason": "expired", "updated_at": utcnow()}})
+        {"$set": {"status": "cancelled", "cancel_reason": reason, "updated_at": utcnow()}})
     if result.modified_count != 1:
         return False
     release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
-    audit("pesanan_kedaluwarsa", order["code"], {"username": "sistem", "role": "-"})
+    audit(audit_action, order["code"], {"username": "sistem", "role": "-"})
     return True
 
 
@@ -1504,14 +1520,16 @@ class GatewayError(Exception):
     pass
 
 
-def xendit_request(method, path, body=None, timeout=8):
+def xendit_request(method, path, body=None, timeout=5, version=XENDIT_API_VERSION):
     # Pakai urllib bawaan Python supaya tidak menambah dependensi. Key tidak pernah ditulis ke log.
     token = base64.b64encode(f"{XENDIT_SECRET_KEY}:".encode()).decode()
+    headers = {"Authorization": "Basic " + token, "Content-Type": "application/json"}
+    if version:
+        headers["api-version"] = version
     request_ = urllib.request.Request(
         XENDIT_API_URL + path, method=method,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Authorization": "Basic " + token, "Content-Type": "application/json",
-                 "api-version": XENDIT_API_VERSION})
+        headers=headers)
     try:
         with urllib.request.urlopen(request_, timeout=timeout) as resp:
             return json.loads(resp.read().decode() or "{}")
@@ -1532,6 +1550,30 @@ def create_xendit_qr(order):
     if not qr_id or not qr_string:
         raise GatewayError("respons Xendit tidak lengkap")
     return qr_id, qr_string
+
+
+def create_xendit_ewallet(order, method):
+    # API e-wallet Xendit terpisah dari API QR: tanpa header api-version. reference_id = kode pesanan.
+    channel = EWALLET_CHANNELS[method]
+    # Xendit menuntut https; di balik proxy Vercel host_url bisa terbaca http, jadi dipaksa https bila di Vercel
+    base = PUBLIC_URL or request.host_url.rstrip("/")
+    if IS_VERCEL and base.startswith("http://"):
+        base = "https://" + base[len("http://"):]
+    props = {"success_redirect_url": f"{base}/?bayar=ok", "failure_redirect_url": f"{base}/?bayar=gagal"}
+    if channel == "ID_OVO":
+        # OVO tidak memakai tautan: Xendit mengirim notifikasi ke aplikasi OVO sesuai nomor HP
+        digits = re.sub(r"\D", "", order["phone"])
+        props = {"mobile_number": "+62" + digits.lstrip("0").removeprefix("62")}
+    result = xendit_request("POST", "/ewallets/charges", {
+        "reference_id": order["code"], "currency": "IDR", "amount": order["total"],
+        "checkout_method": "ONE_TIME_PAYMENT", "channel_code": channel, "channel_properties": props},
+        version=None)
+    charge_id = result.get("id")
+    actions = result.get("actions") if isinstance(result.get("actions"), dict) else {}
+    url = actions.get("mobile_web_checkout_url") or actions.get("desktop_web_checkout_url") or ""
+    if not charge_id or (channel != "ID_OVO" and not url):
+        raise GatewayError("respons Xendit tidak lengkap")
+    return charge_id, url
 
 
 def drop_unpayable_order(db, order):
@@ -1600,6 +1642,8 @@ def orders_create():
                  "status": "pending", "created_at": now, "updated_at": now}
         if clean["payment_method"] == "qris":
             order["expires_at"] = now + timedelta(minutes=QRIS_TTL_MINUTES)
+        elif clean["payment_method"] in EWALLET_CHANNELS:
+            order["expires_at"] = now + timedelta(minutes=EWALLET_TTL_MINUTES[clean["payment_method"]])
         elif clean["payment_method"] != "cash":
             order["expires_at"] = now + timedelta(hours=PENDING_TTL_HOURS)
         if key:
@@ -1621,6 +1665,14 @@ def orders_create():
             raise ApiError("QRIS sedang tidak bisa dibuat. Coba lagi sebentar lagi atau pilih metode lain.", 502)
         db.orders.update_one({"_id": order["_id"]}, {"$set": {"qr_id": qr_id, "qr_string": qr_string}})
         order.update(qr_id=qr_id, qr_string=qr_string)
+    if clean["payment_method"] in EWALLET_CHANNELS:
+        try:
+            charge_id, charge_url = create_xendit_ewallet(order, clean["payment_method"])
+        except GatewayError:
+            drop_unpayable_order(db, order)
+            raise ApiError("E-wallet sedang tidak bisa dibuat. Coba lagi sebentar lagi atau pilih metode lain.", 502)
+        db.orders.update_one({"_id": order["_id"]}, {"$set": {"ewallet_id": charge_id, "ewallet_url": charge_url}})
+        order.update(ewallet_id=charge_id, ewallet_url=charge_url)
     audit("pesanan_buat", f"{order['code']} total {order['total']}")
     return jsonify({"order": order_json(order, user)}), 201
 
@@ -1761,17 +1813,33 @@ def xendit_webhook():
 
     event = payload.get("event")
     data = payload["data"] if isinstance(payload.get("data"), dict) else payload
-    reference, qr_id, amount = data.get("reference_id"), data.get("qr_id"), data.get("amount")
-    paid = str(data.get("status", "")).upper() in XENDIT_PAID_STATUS
+    is_ewallet = event == "ewallet.capture"
+    reference, qr_id = data.get("reference_id"), data.get("qr_id")
+    amount = data.get("charge_amount", data.get("amount")) if is_ewallet else data.get("amount")
+    status = str(data.get("status", "")).upper()
+    paid = status in XENDIT_PAID_STATUS
+    # E-wallet ditolak pelanggan atau tagihan kedaluwarsa di sisi e-wallet
+    failed = is_ewallet and status == "FAILED"
     # Event lain (mis. refund) dan status selain lunas diabaikan; 200 supaya Xendit tidak mengirim ulang
-    if (event and event != "qr.payment") or not paid or not isinstance(reference, str):
+    if (event and event not in ("qr.payment", "ewallet.capture")) or not (paid or failed) or not isinstance(reference, str):
         return jsonify({"ok": True, "ignored": True}), 200
 
     db = get_db()
-    order = db.orders.find_one({"code": reference, "payment_method": "qris"})
+    if is_ewallet:
+        order = db.orders.find_one({"code": reference, "payment_method": {"$in": list(EWALLET_CHANNELS)}})
+        # Nomor transaksi e-wallet harus sama dengan yang tersimpan di pesanan
+        if order and order.get("ewallet_id") and data.get("id") and data["id"] != order["ewallet_id"]:
+            order = None
+    else:
+        order = db.orders.find_one({"code": reference, "payment_method": "qris"})
     if not order:
         audit("pembayaran_tak_dikenal", reference[:40], XENDIT_ACTOR)
         return jsonify({"ok": True, "ignored": True}), 200
+
+    if failed:
+        # Batalkan sekarang supaya stok tidak tertahan sampai batas waktu toko habis; bila sudah tidak pending, tidak ada yang berubah
+        cancel_expired_order(db, order, "payment_failed", "pesanan_bayar_gagal")
+        return jsonify({"ok": True})
 
     amount_ok = isinstance(amount, (int, float)) and not isinstance(amount, bool) and amount == order["total"]
     qr_ok = not (order.get("qr_id") and qr_id and qr_id != order["qr_id"])

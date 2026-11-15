@@ -42,6 +42,7 @@ import {
   managedProducts,
   productGroupCount,
   PAYMENT_LABEL,
+  isEwallet,
   SHIPPING_LABEL,
   countdownText,
   msLeft,
@@ -83,6 +84,23 @@ export function qrisBoxHtml(order) {
   </section>`;
 }
 
+// Tombol menuju e-wallet; kotak ini ikut dipantau polling (data-qris) sehingga berubah sendiri saat lunas
+export function ewalletBoxHtml(order) {
+  const name = escapeHtml(PAYMENT_LABEL[order.payment_method] || 'E-wallet');
+  const deadline = order.expires_at
+    ? `<span class="qris-limit">Bayar dalam <b class="qris-timer" data-expires="${escapeHtml(order.expires_at)}">${countdownText(msLeft(order.expires_at))}</b></span>` : '';
+  const action = order.ewallet_url
+    ? `<a class="btn primary" href="${escapeHtml(order.ewallet_url)}" target="_blank" rel="noopener">Bayar dengan ${name}</a>`
+    : `<p class="qris-hint">Buka aplikasi ${name} lalu setujui pembayaran yang masuk.</p>`;
+  return `<section class="qris" data-qris="${escapeHtml(order.id)}" aria-label="Bayar dengan ${name}">
+    <div class="qris-head"><b class="qris-logo">${name}</b><span>TokoBiru</span></div>
+    <div class="qris-total num">${formatRupiah(order.total)}</div>
+    ${action}
+    <p class="qris-hint">Status berubah otomatis setelah dibayar.</p>
+    ${deadline}
+  </section>`;
+}
+
 const cashNoteHtml = order =>
   `<div class="r-note">Siapkan uang tunai <b>${formatRupiah(order.total)}</b> ${order.shipping_method === 'pickup' ? 'saat mengambil pesanan di toko' : 'saat pesanan diterima'}. Kode pesanan: <b>${escapeHtml(order.code)}</b>.</div>`;
 
@@ -90,7 +108,7 @@ export function showOrderSuccess(order) {
   if (!order) return;
   openModal(`<div class="done"><svg class="done-ic" viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="24"/><path d="M15 27l8 8 14-19"/></svg>
     <h3>Pesanan berhasil dibuat</h3><p class="sub">${order.payment_method === 'cash' ? 'Pesanan Anda segera diproses.' : 'Satu langkah lagi: bayar agar pesanan segera diproses.'}</p></div>
-    ${order.payment_method === 'cash' ? cashNoteHtml(order) : order.payment_method === 'qris' ? qrisBoxHtml(order) : paymentBoxHtml(order)}
+    ${order.payment_method === 'cash' ? cashNoteHtml(order) : order.payment_method === 'qris' ? qrisBoxHtml(order) : isEwallet(order.payment_method) ? ewalletBoxHtml(order) : paymentBoxHtml(order)}
     <div class="foot"><button class="btn primary" data-act="close-modal">Mengerti</button></div>`);
 }
 
@@ -970,11 +988,16 @@ function orderInfoHtml(order) {
     infoRow('Catatan', escapeHtml(order.note))}</dl>`;
 }
 
-const orderAutoCancelHtml = order => order.cancel_reason === 'expired'
-  ? '<p class="r-auto">Dibatalkan otomatis karena melewati batas waktu bayar.</p>' : '';
+const AUTO_CANCEL_TEXT = {
+  expired: 'Dibatalkan otomatis karena melewati batas waktu bayar.',
+  payment_failed: 'Dibatalkan otomatis karena pembayaran e-wallet gagal atau ditolak. Silakan buat pesanan baru.'
+};
+const orderAutoCancelHtml = order => AUTO_CANCEL_TEXT[order.cancel_reason]
+  ? `<p class="r-auto">${AUTO_CANCEL_TEXT[order.cancel_reason]}</p>` : '';
 
 function orderPayBoxHtml(order) {
   if (order.payment_method === 'cash') return cashNoteHtml(order);
+  if (isEwallet(order.payment_method)) return ewalletBoxHtml(order);
   return order.payment_method === 'qris' ? qrisBoxHtml(order) : orderPaymentHtml(order);
 }
 
@@ -989,7 +1012,7 @@ function orderCardHtml(order, staff, index = 0) {
   const justUpdated = order.id === state.justUpdatedOrderId ? ' just' : '';
   const owner = staff ? ', atas nama <b>' + escapeHtml(order.username) + '</b>' : '';
   const hint = !staff && order.status === 'pending' && order.payment_method !== 'cash'
-    ? (order.payment_method === 'qris' && order.expires_at
+    ? ((order.payment_method === 'qris' || isEwallet(order.payment_method)) && order.expires_at
       ? `<p class="r-hint">Bayar dalam <b class="qris-timer" data-expires="${escapeHtml(order.expires_at)}">${countdownText(msLeft(order.expires_at))}</b></p>`
       : '<p class="r-hint">Belum dibayar. Buka untuk bayar.</p>') : '';
   const acts = staff ? orderActions(order) : '';

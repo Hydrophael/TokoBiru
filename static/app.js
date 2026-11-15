@@ -5,6 +5,10 @@ import {
   MAX_CART_QTY,
   NAV,
   PAYMENT_LABEL,
+  isEwallet,
+  EWALLET_GROUP,
+  ewalletChoices,
+  chosenPayment,
   SHIPPING_LABEL,
   STORAGE_KEYS,
   api,
@@ -483,6 +487,9 @@ function openCheckout() {
   const cashNote = '<div class="r-note" data-co-note="cash" hidden>Bayar tunai saat pesanan diterima atau diambil. Siapkan uang pas bila bisa.</div>';
   const qrisNote = `<div class="r-note" data-co-note="qris" hidden>Kode QRIS tampil setelah pesanan dibuat. Bayar dalam ${state.qrisMinutes} menit; begitu pembayaran diterima, status pesanan otomatis menjadi dibayar.</div>`;
 
+  const ewalletNote = Object.keys(PAYMENT_LABEL).filter(isEwallet).map(code =>
+    `<div class="r-note" data-co-note="${code}" hidden>${code === 'ewallet_ovo' ? 'Setelah pesanan dibuat, segera buka aplikasi OVO (nomor HP di atas harus nomor OVO Anda) lalu setujui pembayaran. Permintaan OVO cepat kedaluwarsa.' : `Setelah pesanan dibuat, Anda diarahkan ke ${PAYMENT_LABEL[code]} untuk membayar.`} Bayar dalam ${state.ewalletMinutes[code] || 15} menit; status pesanan otomatis menjadi dibayar.</div>`).join('');
+
   openModal(`<h3>Buat pesanan</h3><p class="sub">${lines.length} produk, total <b class="num" data-co-total>${formatRupiah(subtotal + fee)}</b></p>
       <ul class="sum">${summary}<li><span data-co-ship-label>Ongkos kirim</span><b class="num" data-co-ship>${fee ? formatRupiah(fee) : 'Gratis'}</b></li></ul>
       <form data-form="checkout" novalidate><div class="form-alert" role="alert"></div>
@@ -497,14 +504,18 @@ function openCheckout() {
         </div>
         <div class="field"><label>Catatan untuk penjual (opsional)</label><input class="input" name="note" maxlength="200"></div>
         <div class="field"><label>Pembayaran</label><select class="select" name="payment_method" data-co-pick>${options(paymentChoices())}</select></div>
-        ${transferNote}${cashNote}${qrisNote}
+        <div data-co-ewallet hidden><div class="field"><label>Pilih e-wallet</label><select class="select" name="ewallet_channel" data-co-pick disabled>${options(ewalletChoices())}</select></div></div>
+        ${transferNote}${cashNote}${qrisNote}${ewalletNote}
         <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Buat pesanan (${formatRupiah(subtotal + fee)})</button></div></form>`);
 }
 
 function updateCheckout(form) {
   const subtotal = cartTotal(cartLines());
   const shipping = form.elements.shipping_method.value;
-  const payment = form.elements.payment_method.value;
+  const group = form.elements.payment_method.value;
+  const channel = form.elements.ewallet_channel;
+  const isWallet = group === EWALLET_GROUP;
+  const payment = isWallet ? channel.value : group;
   const fee = shippingFeeFor(subtotal, shipping);
   const total = formatRupiah(subtotal + fee);
   const modal = form.closest('.modal');
@@ -513,6 +524,8 @@ function updateCheckout(form) {
   $('[data-co-ship-label]', modal).textContent = shipping === 'pickup' ? 'Ambil di toko' : 'Ongkos kirim';
   $('[data-co-ship]', modal).textContent = fee ? formatRupiah(fee) : 'Gratis';
   $$('[data-co-addr]', form).forEach(el => { el.hidden = shipping === 'pickup'; });
+  $('[data-co-ewallet]', form).hidden = !isWallet;
+  channel.disabled = !isWallet;
   $$('[data-co-note]', form).forEach(el => { el.hidden = el.dataset.coNote !== payment; });
   $('button[type=submit]', form).textContent = `Buat pesanan (${total})`;
 }
@@ -1325,12 +1338,13 @@ const formHandlers = {
 
     // Harga ikut dikirim: server menolak (409) bila harga katalog sudah berubah
     const items = cartLines().map(line => ({ product_id: line.product.id, qty: line.qty, price: line.product.price }));
+    const payment = chosenPayment(data);
     let result;
     try {
       result = await api('/orders', {
         method: 'POST',
-        body: { items, phone, address, recipient, note: data.note, shipping_method: data.shipping_method, payment_method: data.payment_method },
-        headers: { 'Idempotency-Key': checkoutKey(items, data.shipping_method, data.payment_method) }
+        body: { items, phone, address, recipient, note: data.note, shipping_method: data.shipping_method, payment_method: payment },
+        headers: { 'Idempotency-Key': checkoutKey(items, data.shipping_method, payment) }
       });
     } catch (err) {
       if (err.status === 409 || err.status === 404) return refreshAfterStockConflict(err);
@@ -1584,6 +1598,17 @@ function bindEvents() {
   addEventListener('online', () => toast('Tersambung kembali', 'ok'));
 }
 
+// Pelanggan kembali dari e-wallet lewat /?bayar=ok atau /?bayar=gagal: buka daftar pesanan dan beri kabar
+async function handlePayReturn() {
+  const result = new URLSearchParams(location.search).get('bayar');
+  if (!result) return;
+  history.replaceState(null, '', location.pathname);
+  if (!isCustomer()) return;
+  await show('orders');
+  if (result === 'ok') toast('Terima kasih! Pembayaran sedang dicek, status pesanan berubah otomatis.', 'ok');
+  else toast('Pembayaran belum berhasil. Cek status pesanan Anda di bawah.', 'err');
+}
+
 async function boot() {
   storage.remove(STORAGE_KEYS.legacyProfile);
   state.layout = storage.get(STORAGE_KEYS.layout) === 'rows' ? 'rows' : 'grid';
@@ -1599,11 +1624,13 @@ async function boot() {
     state.payInfo = me.pay_info || '';
     state.dummyQris = Boolean(me.qris_enabled ?? me.dummy_qris);   // nama lama; artinya "QRIS tersedia" (Xendit atau simulasi)
     state.qrisMinutes = Number(me.qris_minutes) || 60;
+    state.ewalletMinutes = me.ewallet_minutes || {};
+    state.ewalletOn = Boolean(me.ewallet_enabled);
     if (me.server_time) state.clockSkew = Date.parse(me.server_time) - Date.now();
     state.shipping = { fee: Number(me.shipping?.fee) || 0, freeMin: Number(me.shipping?.free_min) || 0 };
     state.resetEnabled = Boolean(me.reset_enabled);
 
-    if (me.user) await startSession(me.user);
+    if (me.user) { await startSession(me.user); await handlePayReturn(); }
     else renderAuth('login');
   } catch (err) {
     $('#app').innerHTML = `<div class="empty" style="margin:15vh auto;max-width:460px"><b>Aplikasi belum bisa dimuat</b><p>${escapeHtml(err.message)}</p><button class="btn primary" data-act="refresh-page">Muat ulang</button></div>`;
