@@ -6,6 +6,7 @@ import {
   NAV,
   PAYMENT_LABEL,
   isEwallet,
+  ewalletBadgeHtml,
   EWALLET_GROUP,
   ewalletChoices,
   chosenPayment,
@@ -504,7 +505,7 @@ function openCheckout() {
         </div>
         <div class="field"><label>Catatan untuk penjual (opsional)</label><input class="input" name="note" maxlength="200"></div>
         <div class="field"><label>Pembayaran</label><select class="select" name="payment_method" data-co-pick>${options(paymentChoices())}</select></div>
-        <div data-co-ewallet hidden><div class="field"><label>Pilih e-wallet</label><select class="select" name="ewallet_channel" data-co-pick disabled>${options(ewalletChoices())}</select></div></div>
+        <div data-co-ewallet hidden><fieldset class="ew-pick"><legend>Pilih e-wallet</legend><div class="ew-grid">${Object.keys(ewalletChoices()).map((code, n) => `<label class="ew-opt"><input type="radio" name="ewallet_channel" value="${code}" data-co-pick${n ? '' : ' checked'} disabled>${ewalletBadgeHtml(code)}</label>`).join('')}</div></fieldset></div>
         ${transferNote}${cashNote}${qrisNote}${ewalletNote}
         <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Buat pesanan (${formatRupiah(subtotal + fee)})</button></div></form>`);
 }
@@ -513,9 +514,9 @@ function updateCheckout(form) {
   const subtotal = cartTotal(cartLines());
   const shipping = form.elements.shipping_method.value;
   const group = form.elements.payment_method.value;
-  const channel = form.elements.ewallet_channel;
   const isWallet = group === EWALLET_GROUP;
-  const payment = isWallet ? channel.value : group;
+  const picked = $('input[name=ewallet_channel]:checked', form);
+  const payment = isWallet ? (picked ? picked.value : '') : group;
   const fee = shippingFeeFor(subtotal, shipping);
   const total = formatRupiah(subtotal + fee);
   const modal = form.closest('.modal');
@@ -525,7 +526,7 @@ function updateCheckout(form) {
   $('[data-co-ship]', modal).textContent = fee ? formatRupiah(fee) : 'Gratis';
   $$('[data-co-addr]', form).forEach(el => { el.hidden = shipping === 'pickup'; });
   $('[data-co-ewallet]', form).hidden = !isWallet;
-  channel.disabled = !isWallet;
+  $$('input[name=ewallet_channel]', form).forEach(radio => { radio.disabled = !isWallet; });
   $$('[data-co-note]', form).forEach(el => { el.hidden = el.dataset.coNote !== payment; });
   $('button[type=submit]', form).textContent = `Buat pesanan (${total})`;
 }
@@ -1619,8 +1620,21 @@ async function handlePayReturn() {
   history.replaceState(null, '', location.pathname);
   if (!isCustomer()) return;
   await show('orders');
-  if (result === 'ok') toast('Terima kasih! Pembayaran sedang dicek, status pesanan berubah otomatis.', 'ok');
-  else toast('Pembayaran belum berhasil. Cek status pesanan Anda di bawah.', 'err');
+  if (result === 'ok') {
+    toast('Terima kasih! Pembayaran sedang dicek, status pesanan berubah otomatis.', 'ok');
+    watchPayReturn();
+  } else toast('Pembayaran belum berhasil. Cek status pesanan Anda di bawah.', 'err');
+}
+
+// Kabar lunas dari e-wallet bisa tiba beberapa detik setelah pelanggan kembali: segarkan daftar sampai tidak ada yang menunggu
+async function watchPayReturn() {
+  const waiting = () => state.orders.some(order => order.status === 'pending' && isEwallet(order.payment_method));
+  for (let attempt = 0; attempt < 10 && waiting(); attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    if (state.view !== 'orders') return;
+    if ($('#modal-root').firstChild) continue;
+    await reload();
+  }
 }
 
 async function boot() {

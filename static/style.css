@@ -1118,6 +1118,24 @@ html.calm *,html.calm *::before,html.calm *::after{animation:none!important;tran
 .qris{background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--r);padding:16px;margin-bottom:14px;text-align:center}
 .qris-head{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:12px;font-size:.9rem;color:var(--ink2);font-weight:600}
 .qris-logo{background:var(--blue);color:var(--on-blue);border-radius:6px;padding:2px 9px;letter-spacing:.08em;font-size:.85rem}
+.ew-badge{display:inline-grid;place-items:center;min-width:64px;padding:3px 12px;border-radius:8px;color:#fff;font-weight:700;font-size:.9rem;letter-spacing:.01em;background:var(--blue)}
+.ew-dana{background:#0d78c9}.ew-shopeepay{background:#d9391b}.ew-ovo{background:#4c3494}
+.ew-badge.has-logo{background:#fff;border:1px solid var(--line)}
+.ew-badge img{display:block;height:22px;width:auto}
+/* DANA berbentuk bulat: sedikit lebih besar agar seimbang dengan logo lebar */
+.ew-dana.has-logo img{height:28px}
+.ew-pick{border:0;margin:0 0 12px;padding:0;min-width:0}
+.ew-pick legend{padding:0;margin-bottom:6px;font-size:.95rem;font-weight:600}
+.ew-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.ew-opt{position:relative;display:grid;cursor:pointer}
+.ew-opt input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer}
+.ew-opt .ew-badge{min-height:52px;border-radius:var(--r-sm);opacity:.62;font-size:.95rem;transition:opacity .15s,outline-color .15s}
+/* Logo tidak perlu sepucat badge teks; hover, terpilih, dan nonaktif di bawah tetap menang */
+.ew-opt .ew-badge.has-logo{opacity:.8}
+.ew-opt:hover .ew-badge{opacity:.85}
+.ew-opt input:checked+.ew-badge{opacity:1;outline:3px solid var(--blue-ring);outline-offset:2px;box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--blue)}
+.ew-opt input:focus-visible+.ew-badge{outline:3px solid var(--focus);outline-offset:3px}
+.ew-opt input:disabled+.ew-badge{opacity:.62}
 .qris-qr{display:inline-block;background:#fff;border-radius:12px;padding:6px;border:1px solid var(--line);line-height:0}
 .qris-qr .qr-svg{width:min(220px,60vw);height:auto;display:block;image-rendering:pixelated}
 .qris-total{margin-top:12px;font-size:1.5rem;font-weight:700;color:var(--ink)}

@@ -44,6 +44,7 @@ import {
   productGroupCount,
   PAYMENT_LABEL,
   isEwallet,
+  ewalletBadgeHtml,
   SHIPPING_LABEL,
   countdownText,
   msLeft,
@@ -94,7 +95,7 @@ export function ewalletBoxHtml(order) {
     ? `<a class="btn primary" href="${escapeHtml(order.ewallet_url)}" target="_blank" rel="noopener">Bayar dengan ${name}</a>`
     : `<p class="qris-hint">Buka aplikasi ${name} lalu setujui pembayaran yang masuk.</p>`;
   return `<section class="qris" data-qris="${escapeHtml(order.id)}" aria-label="Bayar dengan ${name}">
-    <div class="qris-head"><b class="qris-logo">${name}</b><span>TokoBiru</span></div>
+    <div class="qris-head">${ewalletBadgeHtml(order.payment_method)}<span>TokoBiru</span></div>
     <div class="qris-total num">${formatRupiah(order.total)}</div>
     ${action}
     <p class="qris-hint">Status berubah otomatis setelah dibayar.</p>

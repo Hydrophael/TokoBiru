@@ -112,6 +112,18 @@ export const PAYMENT_LABEL = {
   ewallet_dana: 'DANA', ewallet_shopeepay: 'ShopeePay', ewallet_ovo: 'OVO'
 };
 export const isEwallet = method => String(method).startsWith('ewallet_');
+// Penanda visual per e-wallet: warna merek + nama. Untuk memakai logo resmi, simpan filenya di /static/icons/pay/ dan isi `logo`, mis. '/static/icons/pay/dana.svg'
+export const EWALLET_BRAND = {
+  ewallet_dana:      { logo: '/static/icons/pay/dana.png' },
+  ewallet_shopeepay: { logo: '/static/icons/pay/shopeepay.png' },
+  ewallet_ovo:       { logo: '/static/icons/pay/ovo.png' }
+};
+export const ewalletBadgeHtml = code => {
+  const name = escapeHtml(PAYMENT_LABEL[code] || 'E-wallet');
+  const cls = 'ew-badge ew-' + String(code).replace('ewallet_', '');
+  const logo = EWALLET_BRAND[code]?.logo;
+  return logo ? `<span class="${cls} has-logo"><img src="${escapeHtml(logo)}" alt="${name}" height="24" decoding="async"></span>` : `<span class="${cls}">${name}</span>`;
+};
 // Di form checkout, DANA/ShopeePay/OVO digabung jadi satu pilihan "E-Wallet"; pilihan rincinya muncul setelah itu
 export const EWALLET_GROUP = 'ewallet';
 export const ewalletChoices = () => Object.fromEntries(Object.entries(PAYMENT_LABEL).filter(([code]) => isEwallet(code)));
