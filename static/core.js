@@ -27,7 +27,10 @@ const ACTION_LABEL = {
   pesanan_hapus: 'Pesanan Dihapus', pesanan_bersihkan: 'Riwayat Dibersihkan',
   user_buat: 'Pengguna Dibuat', user_ubah: 'Pengguna Diubah', user_hapus: 'Pengguna Dihapus',
   profil_ubah: 'Profil Diubah', alamat_ubah: 'Alamat Diubah',
-  akses_ditolak: 'Akses Ditolak'
+  akses_ditolak: 'Akses Ditolak',
+  pesanan_bayar_gagal: 'Pembayaran E-Wallet Gagal', pesanan_gagal_gateway: 'Pesanan Gagal Dibuat',
+  pembayaran_tidak_cocok: 'Nominal Bayar Tidak Cocok', pembayaran_terlambat: 'Dibayar Setelah Batal',
+  pembayaran_tak_dikenal: 'Pembayaran Tak Dikenal', pembayaran_masalah_selesai: 'Masalah Bayar Selesai'
 };
 
 const capitalizeWords = text => String(text ?? '').replace(/(^|\s)(\S+)/g, (_, space, word) =>
@@ -53,6 +56,7 @@ export function detailLabel(log) {
 
 export function logTone(action) {
   if (/gagal|ditolak/.test(action)) return 'err';
+  if (/^pembayaran_(tidak_cocok|terlambat|tak_dikenal)$/.test(action)) return 'warn';
   if (/_hapus$|kedaluwarsa/.test(action)) return 'warn';
   if (/^(register|produk_tambah|user_buat|pesanan_buat)$/.test(action)) return 'ok';
   if (/_ubah$|_status$|password_reset|reset_minta/.test(action)) return 'info';
@@ -61,9 +65,9 @@ export function logTone(action) {
 
 export const LOG_GROUPS = [
   { id: '',        label: 'Semua',            test: () => true },
-  { id: 'alert',   label: 'Perlu dicek',      test: action => /gagal|ditolak/.test(action) },
+  { id: 'alert',   label: 'Perlu dicek',      test: action => /gagal|ditolak|^pembayaran_(tidak_cocok|terlambat|tak_dikenal)$/.test(action) },
   { id: 'auth',    label: 'Login & password', test: action => /^(register|login|logout|password_|reset_|profil_|alamat_)/.test(action) },
-  { id: 'order',   label: 'Pesanan',          test: action => action.startsWith('pesanan_') },
+  { id: 'order',   label: 'Pesanan',          test: action => action.startsWith('pesanan_') || action.startsWith('pembayaran_') },
   { id: 'product', label: 'Produk',           test: action => action.startsWith('produk_') },
   { id: 'user',    label: 'Pengguna',         test: action => action.startsWith('user_') }
 ];
@@ -325,7 +329,9 @@ export const icon = (name, size = 17) =>
 export const emptyState = (title, text = '', action = '') =>
   `<div class="empty"><b>${escapeHtml(title)}</b><p>${escapeHtml(text)}</p>${action}</div>`;
 
-export const statusTag = status => `<span class="tag ${STATUS[status][1]}">${STATUS[status][0]}</span>`;
+// Pesanan COD (cod=true) belum menunggu pembayaran: uang baru diterima saat barang sampai
+export const orderStatusText = (status, order) => (order?.cod && status === 'pending' ? 'Menunggu diproses' : STATUS[status][0]);
+export const statusTag = (status, order) => `<span class="tag ${STATUS[status][1]}">${orderStatusText(status, order)}</span>`;
 
 export function stockInfo(product) {
   const { stock } = product;

@@ -29,6 +29,7 @@ import {
   tileVisualHtml,
   state,
   statusTag,
+  orderStatusText,
   stockInfo,
   stockNote,
   storage,
@@ -931,15 +932,16 @@ export function setCartQty(id, qty) {
   drawCart();
 }
 
-function timelineHtml(status) {
+function timelineHtml(status, order = {}) {
   if (status === 'cancelled') return '';
-  const currentIndex = status === 'completed' ? ORDER_FLOW.length : ORDER_FLOW.indexOf(status);
+  const flow = order.cod ? ORDER_FLOW.filter(key => key !== 'paid') : ORDER_FLOW;
+  const currentIndex = status === 'completed' ? flow.length : flow.indexOf(status);
 
-  const steps = ORDER_FLOW.map((key, n) => {
+  const steps = flow.map((key, n) => {
     const cls = n < currentIndex ? 'done' : n === currentIndex ? 'now' : '';
     const ariaCurrent = n === currentIndex ? ' aria-current="step"' : '';
     const marker = n < currentIndex ? icon('check', 12) : n + 1;
-    return `<li class="${cls}"${ariaCurrent}><i>${marker}</i><span>${STATUS[key][0]}</span></li>`;
+    return `<li class="${cls}"${ariaCurrent}><i>${marker}</i><span>${orderStatusText(key, order)}</span></li>`;
   }).join('');
 
   return `<ol class="steps" aria-label="Progres pesanan">${steps}</ol>`;
@@ -950,9 +952,12 @@ const statusButton = (order, status, label, cls = '') =>
 
 function staffOrderActions(order) {
   switch (order.status) {
-    case 'pending': return statusButton(order, 'paid', order.payment_method === 'cash' ? 'Terima pembayaran tunai' : 'Konfirmasi pembayaran', 'primary') + statusButton(order, 'cancelled', 'Batalkan', 'danger');
+    case 'pending': if (order.cod) return statusButton(order, 'shipped', 'Tandai dikirim', 'primary') + statusButton(order, 'cancelled', 'Batalkan', 'danger');
+      return statusButton(order, 'paid', order.payment_method === 'cash' ? 'Terima pembayaran tunai' : 'Konfirmasi pembayaran', 'primary') + statusButton(order, 'cancelled', 'Batalkan', 'danger');
     case 'paid':    return statusButton(order, 'shipped', 'Tandai dikirim', 'primary') + statusButton(order, 'cancelled', 'Batalkan', 'danger');
-    case 'shipped': return statusButton(order, 'completed', 'Tandai selesai', 'primary');
+    case 'shipped': return order.cod
+      ? statusButton(order, 'completed', 'Selesai, uang diterima', 'primary') + statusButton(order, 'cancelled', 'Batalkan', 'danger')
+      : statusButton(order, 'completed', 'Tandai selesai', 'primary');
     default:        return '';
   }
 }
@@ -994,7 +999,7 @@ const AUTO_CANCEL_TEXT = {
 };
 // Masalah uang yang harus ditangani admin: pembayaran masuk setelah pesanan batal, atau nominal tidak cocok
 const paymentFlagText = order => order.needs_refund
-  ? 'Uang sudah masuk setelah pesanan dibatalkan. Kembalikan dana lewat Dashboard Xendit.'
+  ? 'Uang pelanggan sudah masuk tetapi pesanan dibatalkan. Kembalikan dana: lewat Dashboard Xendit untuk QRIS/e-wallet, atau transfer balik untuk transfer bank.'
   : order.payment_issue ? 'Nominal pembayaran tidak sama dengan total pesanan. Periksa di Dashboard Xendit.' : '';
 const paymentFlagBrief = order => paymentFlagText(order)
   ? `<p class="r-hint"><b>⚠ ${order.needs_refund ? 'Perlu refund' : 'Nominal tidak cocok'}</b></p>` : '';
@@ -1017,7 +1022,8 @@ function orderSummaryHtml(order) {
 
 // Kartu ringkas: rincian lengkap dibuka lewat orderDetailModal supaya daftar tidak memanjang
 function orderCardHtml(order, staff, index = 0) {
-  const [statusLabel, statusColor] = STATUS[order.status];
+  const statusColor = STATUS[order.status][1];
+  const statusLabel = orderStatusText(order.status, order);
   const justUpdated = order.id === state.justUpdatedOrderId ? ' just' : '';
   const owner = staff ? ', atas nama <b>' + escapeHtml(order.username) + '</b>' : '';
   const hint = !staff && order.status === 'pending' && order.payment_method !== 'cash'
@@ -1040,7 +1046,8 @@ function orderCardHtml(order, staff, index = 0) {
 
 export function orderDetailModal(order) {
   const staff = isStaff();
-  const [statusLabel, statusColor] = STATUS[order.status];
+  const statusColor = STATUS[order.status][1];
+  const statusLabel = orderStatusText(order.status, order);
   const owner = staff ? ' · atas nama <b>' + escapeHtml(order.username) + '</b>' : '';
   const payment = !staff && order.status === 'pending' ? orderPayBoxHtml(order) : '';
   const remove = !staff && CLOSED_ORDER.includes(order.status)
@@ -1049,7 +1056,7 @@ export function orderDetailModal(order) {
   openModal(`<div data-order="${order.id}">
     <h3>${escapeHtml(order.code)}</h3>
     <div class="od-head"><span class="muted small">${formatDate(order.created_at)}${owner}</span><span class="stamp ${statusColor}">${statusLabel}</span></div>
-    ${timelineHtml(order.status)}
+    ${timelineHtml(order.status, order)}
     <ul class="r-lines">${order.items.map(orderLineHtml).join('')}${shippingLineHtml(order)}</ul>
     <div class="r-total"><span>Total</span><strong class="num">${formatRupiah(order.total)}</strong></div>
     ${orderInfoHtml(order)}${orderAutoCancelHtml(order)}${staff ? paymentFlagBox(order) : ''}${payment}
@@ -1113,7 +1120,7 @@ function dashboardFactsHtml(stats) {
 }
 
 function revenueHeroHtml(stats) {
-  const paidOrders = stats.orders.paid + stats.orders.shipped + stats.orders.completed;
+  const paidOrders = stats.paid_orders ?? (stats.orders.paid + stats.orders.shipped + stats.orders.completed);
   const average = paidOrders ? Math.round(stats.revenue / paidOrders) : 0;
   return `<div class="revenue">
       <div><span>Total pendapatan dari pesanan yang sudah dibayar</span><strong class="num">${formatRupiah(stats.revenue)}</strong></div>
@@ -1139,7 +1146,7 @@ function orderStatusBarsHtml(stats) {
 }
 
 const recentOrdersHtml = stats => stats.recent.length
-  ? stats.recent.map(order => `<div class="line"><span class="l-main"><b class="num">${escapeHtml(order.code)}</b><span class="muted small">${escapeHtml(order.username)}${order.created_at ? ', ' + escapeHtml(formatDate(order.created_at)) : ''}</span></span><span class="l-end">${statusTag(order.status)} <b class="num">${formatRupiah(order.total)}</b></span></div>`).join('')
+  ? stats.recent.map(order => `<div class="line"><span class="l-main"><b class="num">${escapeHtml(order.code)}</b><span class="muted small">${escapeHtml(order.username)}${order.created_at ? ', ' + escapeHtml(formatDate(order.created_at)) : ''}</span></span><span class="l-end">${statusTag(order.status, order)} <b class="num">${formatRupiah(order.total)}</b></span></div>`).join('')
   : '<p class="muted">Belum ada pesanan masuk.</p>';
 
 const lowStockHtml = stats => stats.low_stock.length

@@ -6,7 +6,8 @@
 // - File lain (halaman, JS, CSS) memakai "jaringan dulu": bila ada sinyal, versi terbaru yang dipakai,
 //   jadi setelah deploy tidak ada campuran file lama dan baru. Salinan tersimpan hanya dipakai saat offline.
 
-const CACHE = 'tokobiru-shell-v5';
+const CACHE = 'tokobiru-shell-v6';
+const NETWORK_TIMEOUT_MS = 4000;   // lewat batas ini dan ada salinan tersimpan, pakai salinan
 const SHELL = ['/', '/static/style.css', '/static/app.js', '/static/core.js', '/static/views.js',
   '/static/ui.js', '/static/photo.js', '/static/settings.js', '/static/layout.js', '/static/webix-core.js', '/static/logs-grid.js', '/static/products-grid.js', '/static/theme.js', '/static/qr.js', '/static/pwa.js'];
 
@@ -36,15 +37,29 @@ self.addEventListener('fetch', event => {
   if (url.pathname.startsWith('/pay/')) return;           // halaman bayar QRIS: jangan disimpan
   if (url.pathname === '/sw.js') return;
 
-  event.respondWith(
-    fetch(request)
-      .then(response => {
-        if (response.ok) {
-          const copy = response.clone();
-          caches.open(CACHE).then(cache => cache.put(request, copy));
-        }
-        return response;
-      })
-      .catch(() => caches.match(request).then(hit => hit || (request.mode === 'navigate' ? caches.match('/') : undefined)))
-  );
+  event.respondWith((async () => {
+    const network = fetch(request).then(response => {
+      // Hanya respons utuh (200) yang disimpan; waitUntil menjaga penyimpanan tidak terputus
+      if (response.status === 200) {
+        const copy = response.clone();
+        event.waitUntil(caches.open(CACHE).then(cache => cache.put(request, copy)).catch(() => {}));
+      }
+      return response;
+    });
+    network.catch(() => {});
+    try {
+      return await Promise.race([
+        network,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), NETWORK_TIMEOUT_MS))
+      ]);
+    } catch {
+      const hit = await caches.match(request);
+      if (hit) return hit;
+      if (request.mode === 'navigate') {
+        const shell = await caches.match('/');
+        if (shell) return shell;
+      }
+      return network;   // tidak ada salinan: tetap tunggu jaringan
+    }
+  })());
 });
