@@ -1538,8 +1538,9 @@ def xendit_request(method, path, body=None, timeout=5, version=XENDIT_API_VERSIO
         with urllib.request.urlopen(request_, timeout=timeout) as resp:
             return json.loads(resp.read().decode() or "{}")
     except urllib.error.HTTPError as exc:
-        app.logger.error("Xendit %s %s -> HTTP %s %s", method, path, exc.code, exc.read().decode(errors="replace")[:300])
-        raise GatewayError(f"HTTP {exc.code}") from exc
+        detail = exc.read().decode(errors="replace")[:300]
+        app.logger.error("Xendit %s %s -> HTTP %s %s", method, path, exc.code, detail)
+        raise GatewayError(f"HTTP {exc.code} {detail}") from exc
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         app.logger.error("Xendit %s %s gagal: %s", method, path, exc)
         raise GatewayError(str(exc)) from exc
@@ -1580,11 +1581,12 @@ def create_xendit_ewallet(order, method):
     return charge_id, url
 
 
-def drop_unpayable_order(db, order):
+def drop_unpayable_order(db, order, reason=""):
     # Pesanan dihapus (bukan dibatalkan) supaya percobaan ulang dengan Idempotency-Key yang sama tidak mengembalikan pesanan mati
     if db.orders.delete_one({"_id": order["_id"], "status": "pending"}).deleted_count:
         release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
-        audit("pesanan_gagal_gateway", order["code"], {"username": "sistem", "role": "-"})
+        # Alasan dari Xendit (tanpa kunci rahasia) ikut dicatat supaya admin bisa melihatnya di halaman Log
+        audit("pesanan_gagal_gateway", f"{order['code']} {reason}".strip()[:240], {"username": "sistem", "role": "-"})
 
 
 @app.get("/api/orders")
@@ -1664,16 +1666,16 @@ def orders_create():
     if clean["payment_method"] == "qris" and XENDIT_ENABLED:
         try:
             qr_id, qr_string = create_xendit_qr(order)
-        except GatewayError:
-            drop_unpayable_order(db, order)
+        except GatewayError as exc:
+            drop_unpayable_order(db, order, str(exc))
             raise ApiError("QRIS sedang tidak bisa dibuat. Coba lagi sebentar lagi atau pilih metode lain.", 502)
         db.orders.update_one({"_id": order["_id"]}, {"$set": {"qr_id": qr_id, "qr_string": qr_string}})
         order.update(qr_id=qr_id, qr_string=qr_string)
     if clean["payment_method"] in EWALLET_CHANNELS:
         try:
             charge_id, charge_url = create_xendit_ewallet(order, clean["payment_method"])
-        except GatewayError:
-            drop_unpayable_order(db, order)
+        except GatewayError as exc:
+            drop_unpayable_order(db, order, str(exc))
             raise ApiError("E-wallet sedang tidak bisa dibuat. Coba lagi sebentar lagi atau pilih metode lain.", 502)
         db.orders.update_one({"_id": order["_id"]}, {"$set": {"ewallet_id": charge_id, "ewallet_url": charge_url}})
         order.update(ewallet_id=charge_id, ewallet_url=charge_url)
