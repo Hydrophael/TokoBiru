@@ -538,6 +538,10 @@ def order_json(order, user=None):
         out["qr_string"] = order["qr_string"]
     if owner_pending and order.get("ewallet_url"):
         out["ewallet_url"] = order["ewallet_url"]
+    # Penanda masalah uang (refund, nominal tidak cocok) hanya untuk admin
+    if not (user and user["role"] in STAFF_ROLES):
+        out.pop("needs_refund", None)
+        out.pop("payment_issue", None)
     return out
 
 
@@ -1855,6 +1859,22 @@ def xendit_webhook():
         db.orders.update_one({"_id": order["_id"]}, {"$set": {"needs_refund": True, "updated_at": utcnow()}})
         audit("pembayaran_terlambat", f"{order['code']} dibayar setelah dibatalkan, perlu refund", XENDIT_ACTOR)
     return jsonify({"ok": True})
+
+
+@app.post("/api/orders/<order_id>/issue-resolved")
+@roles_required(*STAFF_ROLES)
+def order_issue_resolved(order_id):
+    # Admin menandai bahwa refund atau selisih nominal sudah diurus (uangnya sendiri dikembalikan lewat Dashboard Xendit)
+    db = get_db()
+    user = current_user()
+    order = db.orders.find_one_and_update(
+        {"_id": object_id(order_id, "Pesanan"), "$or": [{"needs_refund": True}, {"payment_issue": {"$exists": True}}]},
+        {"$unset": {"needs_refund": "", "payment_issue": ""}, "$set": {"updated_at": utcnow()}},
+        return_document=ReturnDocument.AFTER)
+    if not order:
+        raise ApiError("Pesanan ini tidak punya masalah pembayaran yang perlu ditangani", 404)
+    audit("pembayaran_masalah_selesai", order["code"])
+    return jsonify({"order": order_json(order, user)})
 
 
 @app.delete("/api/orders/<order_id>")

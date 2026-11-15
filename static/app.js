@@ -606,6 +606,19 @@ async function clearOrderHistory() {
   await reload();
 }
 
+async function resolvePaymentIssue(el) {
+  const confirmed = await confirmDialog('Sudah ditangani?', 'Pastikan dana sudah dikembalikan atau selisihnya sudah dibereskan di Dashboard Xendit. Penanda akan dihapus dari pesanan ini.', 'Ya, sudah');
+  if (!confirmed) return;
+  try {
+    await api(`/orders/${el.dataset.id}/issue-resolved`, { method: 'POST', body: {} });
+    if ($('#modal-root').firstChild) closeModal();
+    toast('Penanda dihapus', 'ok');
+    await reload();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
 async function changeOrderStatus(el) {
   const { id, status } = el.dataset;
 
@@ -1083,6 +1096,7 @@ const actions = {
   'orders-clear': clearOrderHistory,
   reorder,
   'order-status': changeOrderStatus,
+  'issue-done': resolvePaymentIssue,
 
   'product-new': () => productModal(null),
   'product-edit': el => productModal(state.productMap[el.dataset.id]),

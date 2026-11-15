@@ -992,6 +992,15 @@ const AUTO_CANCEL_TEXT = {
   expired: 'Dibatalkan otomatis karena melewati batas waktu bayar.',
   payment_failed: 'Dibatalkan otomatis karena pembayaran e-wallet gagal atau ditolak. Silakan buat pesanan baru.'
 };
+// Masalah uang yang harus ditangani admin: pembayaran masuk setelah pesanan batal, atau nominal tidak cocok
+const paymentFlagText = order => order.needs_refund
+  ? 'Uang sudah masuk setelah pesanan dibatalkan. Kembalikan dana lewat Dashboard Xendit.'
+  : order.payment_issue ? 'Nominal pembayaran tidak sama dengan total pesanan. Periksa di Dashboard Xendit.' : '';
+const paymentFlagBrief = order => paymentFlagText(order)
+  ? `<p class="r-hint"><b>⚠ ${order.needs_refund ? 'Perlu refund' : 'Nominal tidak cocok'}</b></p>` : '';
+const paymentFlagBox = order => paymentFlagText(order)
+  ? `<div class="r-note"><b>⚠ ${order.needs_refund ? 'Perlu refund' : 'Nominal tidak cocok'}</b><br>${paymentFlagText(order)}<br>
+      <button type="button" class="btn sm" data-act="issue-done" data-id="${order.id}">Sudah ditangani</button></div>` : '';
 const orderAutoCancelHtml = order => AUTO_CANCEL_TEXT[order.cancel_reason]
   ? `<p class="r-auto">${AUTO_CANCEL_TEXT[order.cancel_reason]}</p>` : '';
 
@@ -1023,7 +1032,7 @@ function orderCardHtml(order, staff, index = 0) {
         <span class="muted small r-date">${formatDate(order.created_at)}${owner}</span>
         <span class="stamp ${statusColor}${justUpdated}">${statusLabel}</span></div>
       <p class="r-sum">${orderSummaryHtml(order)}</p>
-      ${hint}
+      ${hint}${staff ? paymentFlagBrief(order) : ''}
       <div class="r-foot"><strong class="num">${formatRupiah(order.total)}</strong><span class="r-more">Lihat detail</span></div>
       ${acts ? `<div class="acts">${acts}</div>` : ''}
     </article>`;
@@ -1043,7 +1052,7 @@ export function orderDetailModal(order) {
     ${timelineHtml(order.status)}
     <ul class="r-lines">${order.items.map(orderLineHtml).join('')}${shippingLineHtml(order)}</ul>
     <div class="r-total"><span>Total</span><strong class="num">${formatRupiah(order.total)}</strong></div>
-    ${orderInfoHtml(order)}${orderAutoCancelHtml(order)}${payment}
+    ${orderInfoHtml(order)}${orderAutoCancelHtml(order)}${staff ? paymentFlagBox(order) : ''}${payment}
     <div class="foot wrap"><button type="button" class="btn sm" data-act="close-modal">Tutup</button>${orderActions(order)}${remove}</div>
   </div>`);
 }
