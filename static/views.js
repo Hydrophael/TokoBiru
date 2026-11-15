@@ -1,5 +1,3 @@
-// TokoBiru - tampilan: fungsi yang menghasilkan HTML tiap halaman
-
 import {
   $,
   $$,
@@ -43,16 +41,15 @@ import {
   stockFlag,
   managedProducts,
   productGroupCount,
+  PAYMENT_LABEL,
+  SHIPPING_LABEL,
 } from './core.js';
+import { qrSvg } from './qr.js';
 import { EASE, burst, linkLabels, openModal, reducedMotion, toast, tweenNumber } from './ui.js';
 import { AVATAR_HINT, PHOTO_HINT, avatarPreviewHtml, photoPreviewHtml } from './photo.js';
 import { actionTagHtml, actorHtml, logEmptyHtml, mountLogGrid, refreshLogGrid, visibleLogIds } from './logs-grid.js';
 import { mountProductGrid, productActionsHtml, productCountHtml, productNameHtml, productResetHtml } from './products-grid.js';
 
-// === Modal pesanan berhasil ===
-
-// Kotak "Cara bayar": dipakai di dialog sukses checkout dan di kartu pesanan yang masih menunggu bayar.
-// Tiap baris: label kecil di atas, nilai di bawahnya, tombol Salin di kanan, jadi nilai panjang tidak berantakan.
 function paymentBoxHtml(order, title = '') {
   const deadline = order.expires_at ? `Bayar sebelum <b>${formatDate(order.expires_at)}</b>` : '';
   const head = title || deadline
@@ -66,19 +63,37 @@ function paymentBoxHtml(order, title = '') {
   </section>`;
 }
 
+export const qrisPaidHtml = () =>
+  `<div class="qris-ok"><svg class="done-ic" viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="24"/><path d="M15 27l8 8 14-19"/></svg><b>Pembayaran diterima</b><span>Pesanan Anda segera diproses.</span></div>`;
+
+// QR berisi tautan bayar; setelah discan, app.js mengganti kotak ini menjadi centang
+export function qrisBoxHtml(order) {
+  if (!order.pay_path) return '';
+  const url = location.origin + order.pay_path;
+  const deadline = order.expires_at ? `<span class="qris-limit">Bayar sebelum <b>${formatDate(order.expires_at)}</b></span>` : '';
+  return `<section class="qris" data-qris="${escapeHtml(order.id)}" aria-label="Bayar dengan QRIS">
+    <div class="qris-head"><b class="qris-logo">QRIS</b><span>TokoBiru</span></div>
+    <div class="qris-qr">${qrSvg(url)}</div>
+    <div class="qris-total num">${formatRupiah(order.total)}</div>
+    <p class="qris-hint">Scan kode ini dengan kamera HP. Pesanan langsung berstatus dibayar.</p>
+    ${deadline}
+    <button type="button" class="btn sm" data-act="qris-sim" data-id="${escapeHtml(order.id)}">Bayar sekarang</button>
+  </section>`;
+}
+
+const cashNoteHtml = order =>
+  `<div class="r-note">Siapkan uang tunai <b>${formatRupiah(order.total)}</b> ${order.shipping_method === 'pickup' ? 'saat mengambil pesanan di toko' : 'saat pesanan diterima'}. Kode pesanan: <b>${escapeHtml(order.code)}</b>.</div>`;
+
 export function showOrderSuccess(order) {
   if (!order) return;
   openModal(`<div class="done"><svg class="done-ic" viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="24"/><path d="M15 27l8 8 14-19"/></svg>
-    <h3>Pesanan berhasil dibuat</h3><p class="sub">Satu langkah lagi: bayar agar pesanan segera diproses.</p></div>
-    ${paymentBoxHtml(order)}
+    <h3>Pesanan berhasil dibuat</h3><p class="sub">${order.payment_method === 'cash' ? 'Pesanan Anda segera diproses.' : 'Satu langkah lagi: bayar agar pesanan segera diproses.'}</p></div>
+    ${order.payment_method === 'cash' ? cashNoteHtml(order) : order.payment_method === 'qris' ? qrisBoxHtml(order) : paymentBoxHtml(order)}
     <div class="foot"><button class="btn primary" data-act="close-modal">Mengerti</button></div>`);
 }
 
-// === Halaman masuk / daftar ===
-
 const TICKER_WORDS = ['Beras', 'Minyak goreng', 'Telur', 'Kopi', 'Sabun', 'Susu', 'Teh', 'Roti', 'Madu', 'Tisu'];
 
-// [nama, harga, harga satuan]
 const PRICE_TAGS = [
   ['Beras premium 5 kg', '72.000', 'Rp14.400 / kg'],
   ['Minyak goreng 2 L', '38.500', 'Rp19.250 / L'],
@@ -99,7 +114,6 @@ const loginFormHtml = () => `
       <button class="btn primary block" type="submit">Masuk</button>
     </form>`;
 
-// Tautan hanya muncul bila server sudah dikonfigurasi untuk mengirim email
 const forgotLinkHtml = () => state.resetEnabled
   ? '<p class="alt"><button type="button" class="linkbtn" data-act="forgot-open">Lupa password?</button></p>'
   : '';
@@ -149,7 +163,6 @@ function authArtHtml() {
     </section>`;
 }
 
-// Kartu terdiri dari tab (tetap) dan area formulir (diganti saat pindah tab)
 function authTabsHtml(tab) {
   const isLogin = tab === 'login';
   return `<div class="switch-tabs" role="tablist" data-tab="${tab}">
@@ -167,15 +180,12 @@ function authFormAreaHtml(tab) {
 const authPanelHtml = tab =>
   `<section class="auth-panel"><div class="auth-card">${authTabsHtml(tab)}<div class="auth-swap">${authFormAreaHtml(tab)}</div></div></section>`;
 
-// Fokus otomatis hanya di perangkat dengan mouse (hindari keyboard muncul di HP)
 function focusFirstField() {
   if (!matchMedia('(hover:hover) and (pointer:fine)').matches) return;
   const firstInput = $('.auth-card form input:not([type=checkbox])');
   if (firstInput) firstInput.focus();
 }
 
-// Pindah Masuk/Daftar: bagian kiri tidak disentuh. Formulir lama keluar, kartu menyesuaikan tinggi,
-// lalu isi baru masuk satu per satu dari arah tab yang dipilih.
 let swapToken = 0;
 
 async function swapAuthTab(card, tab) {
@@ -184,7 +194,7 @@ async function swapAuthTab(card, tab) {
 
   const swap = $('.auth-swap', card);
   const token = ++swapToken;
-  swap.getAnimations().forEach(animation => animation.cancel());  // klik tab lagi di tengah animasi
+  swap.getAnimations().forEach(animation => animation.cancel());
   swap.style.overflow = '';
   swap.style.pointerEvents = '';
   const fromHeight = swap.offsetHeight;
@@ -207,17 +217,15 @@ async function swapAuthTab(card, tab) {
 
   if (reducedMotion.matches) return replaceContent();
 
-  // 1. isi lama keluar ke arah berlawanan
   swap.style.pointerEvents = 'none';
   try {
     await swap.animate(
       [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-direction * 14}px)` }],
       { duration: 90, easing: 'ease-in', fill: 'forwards' }
     ).finished;
-  } catch { return; }              // dibatalkan oleh pemanggilan berikutnya
+  } catch { return; }
   if (token !== swapToken) return;
 
-  // 2. ganti isi, lalu tinggi kartu menyesuaikan
   replaceContent();
   const toHeight = swap.offsetHeight;
   if (fromHeight !== toHeight) {
@@ -226,11 +234,9 @@ async function swapAuthTab(card, tab) {
       .onfinish = () => { swap.style.overflow = ''; };
   }
 
-  // 3. bagian-bagian formulir masuk bergantian
   staggerIn(swap, direction, 0, { duration: 260, step: 18 });
 }
 
-// Judul, kolom isian, dan tombol muncul satu per satu (direction 0 = naik dari bawah saja)
 function staggerIn(swap, direction, startDelay, { duration = 420, step = 36 } = {}) {
   if (reducedMotion.matches) return;
   const parts = $$(':scope > h2, :scope > p, :scope > form > *', swap).filter(el => el.getClientRects().length);
@@ -245,7 +251,6 @@ export function renderAuth(tab = state.authTab) {
 
   const card = $('#app .auth .auth-card');
   if (card) {
-    // Halaman masuk sudah tampil: ganti formulirnya saja, bagian kiri tetap utuh
     swapAuthTab(card, tab);
     return;
   }
@@ -258,7 +263,7 @@ export function renderAuth(tab = state.authTab) {
   startPriceTagRotation();
   linkLabels($('#app'));
   focusFirstField();
-  staggerIn($('.auth-swap'), 0, 460);   // setelah kartu muncul
+  staggerIn($('.auth-swap'), 0, 460);
 }
 
 let priceTagTimer;
@@ -279,8 +284,6 @@ function startPriceTagRotation() {
   }, 4000);
 }
 
-// === Kerangka dan navigasi ===
-
 function navHtml(items) {
   return items.map(item => {
     const active = state.view === item.id;
@@ -299,7 +302,6 @@ const cartDrawerHtml = () => `<div class="scrim" id="scrim" data-act="close-cart
 
 const skeletonHtml = () => `<div class="shelf">${'<div class="skeleton"></div>'.repeat(8)}</div>`;
 
-// Penanda menu aktif meluncur ke tombol yang dipilih (posisi dibaca dari tombolnya)
 function moveNavIndicator() {
   const nav = $('.nav');
   const active = nav && $('button.active', nav);
@@ -326,13 +328,9 @@ let navFrame;
 addEventListener('resize', () => { cancelAnimationFrame(navFrame); navFrame = requestAnimationFrame(moveNavIndicator); });
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(moveNavIndicator);
 
-// --- Menu profil (pojok kanan atas): avatar + sapaan membuka menu akun ---
-// Desktop: kartu popover. HP (<= 600px): lembar yang naik dari bawah, dengan latar gelap di belakangnya.
-
 const firstName = name => String(name).trim().split(/\s+/)[0] || String(name);
 
-// Alamat foto profil dari server berbentuk /api/auth/avatar?v=angka; bentuk lain dianggap tidak ada foto
-const AVATAR_URL = /^\/api\/(?:auth\/avatar|users\/[0-9a-fA-F]{24}\/avatar)\?v=\d+$/;   // foto sendiri, atau foto pengguna (khusus master)
+const AVATAR_URL = /^\/api\/(?:auth\/avatar|users\/[0-9a-fA-F]{24}\/avatar)\?v=\d+$/;
 export const avatarPhoto = user => (typeof user?.photo === 'string' && AVATAR_URL.test(user.photo) ? user.photo : '');
 
 export const avatarHtml = (user, size = '') => {
@@ -386,7 +384,6 @@ function profileMenuHtml() {
     </div>`;
 }
 
-// Nama berubah: gambar ulang menu profil saja (header lainnya tidak disentuh)
 export function refreshProfileMenu() {
   const current = $('#app .pm');
   if (current) current.outerHTML = profileMenuHtml();
@@ -399,7 +396,6 @@ export function profileModal() {
   const addresses = user.addresses || [];
   const main = addresses.find(item => item.main) || addresses[0];
 
-  // Alamat dikelola di modal sendiri ("Alamat saya"); di sini hanya ringkasan dan tombol menuju ke sana
   const shipping = customer ? `
       <div class="pf-addr"><div class="set-t"><b>Alamat pengiriman</b>
         <small>${main ? escapeHtml(`${main.label}: ${main.address.replace(/\s+/g, ' ')}`) : 'Belum ada alamat tersimpan.'}</small></div>
@@ -424,8 +420,6 @@ export function profileModal() {
       <p class="muted small" style="margin:-6px 0 14px">Username dan email tidak bisa diubah di sini.</p>${shipping}
       <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Simpan</button></div></form>`);
 }
-
-// --- Alamat saya (buku alamat pelanggan, tersimpan di akun) ---
 
 const addressCardHtml = item => {
   const id = escapeHtml(item.id);
@@ -458,7 +452,6 @@ export function addressesModal() {
 export function addressFormModal(item = null) {
   const addresses = state.user.addresses || [];
   const values = item || { label: 'Rumah', recipient: state.user.name, phone: '', address: '', main: false };
-  // alamat pertama otomatis jadi utama; yang sudah utama tidak perlu kotak centang
   const canPickMain = addresses.length > 0 && !values.main;
   const options = ADDRESS_LABELS.map(label => `<option value="${label}"${label === values.label ? ' selected' : ''}>${label}</option>`).join('');
 
@@ -471,8 +464,6 @@ export function addressFormModal(item = null) {
       ${canPickMain ? '<label class="save-addr"><input type="checkbox" class="tick" name="main" value="1"> Jadikan alamat utama</label>' : ''}
       <div class="foot"><button type="button" class="btn" data-act="address-open">Batal</button><button type="submit" class="btn primary">Simpan</button></div></form>`);
 }
-
-// --- Tentang aplikasi ---
 
 export function aboutModal() {
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -494,7 +485,6 @@ export function renderShell() {
   const navItems = NAV.filter(item => item.roles.includes(user.role));
   const customer = isCustomer();
 
-  // Kerangka sudah tampil (pindah menu): header tidak digambar ulang, hanya penanda menu yang bergeser
   const header = $('#app .top');
   if (header && header.dataset.user === String(user.id)) {
     updateNav();
@@ -520,25 +510,17 @@ export function renderShell() {
   if (customer) drawCart();
 }
 
-// === Tampilan ===
-
-// --- Belanja ---
-
 const truncationNotice = () => state.productsTotal > state.products.length
   ? `<p class="muted small" role="status">Katalog sangat besar: hanya ${state.products.length} dari ${state.productsTotal} produk yang dimuat.</p>`
   : '';
 
-// Filter tambahan (harga dan stok). Kategori dan kata pencarian punya kontrolnya sendiri.
 const hasPriceFilter = () => state.filters.min !== null || state.filters.max !== null;
 export const activeFilterCount = () => (hasPriceFilter() ? 1 : 0) + (state.filters.inStock ? 1 : 0);
 export const hasAnyFilter = () => Boolean(state.category || state.query.trim() || activeFilterCount());
 
-// Produk yang lolos semua filter, belum diurutkan.
-// skipCategory = true dipakai untuk menghitung jumlah produk per kategori pada rel kategori.
 function matchingProducts(skipCategory = false) {
   const query = state.query.trim().toLowerCase();
   const { inStock, min, max } = state.filters;
-  // Hasil pencarian server (indeks teks) dipakai bila sudah tiba; sebelum itu, filter nama di sisi klien
   const rank = query && state.searchIds ? new Map(state.searchIds.map((id, index) => [id, index])) : null;
   const matchesQuery = p => rank ? rank.has(p.id) : (!query || p.name.toLowerCase().includes(query));
 
@@ -558,23 +540,21 @@ function filteredProducts() {
   const compare = (a, b) => {
     if (sort === 'low') return a.price - b.price;
     if (sort === 'high') return b.price - a.price;
-    if (sort === 'auto' && rank) return rank.get(a.id) - rank.get(b.id);   // sedang mencari: paling relevan dulu
+    if (sort === 'auto' && rank) return rank.get(a.id) - rank.get(b.id);
     return a.name.localeCompare(b.name, 'id');
   };
 
-  return list.sort((a, b) => (a.stock === 0) - (b.stock === 0) || compare(a, b)); // stok habis selalu di bawah
+  return list.sort((a, b) => (a.stock === 0) - (b.stock === 0) || compare(a, b));
 }
 
 const countLabel = total =>
   total > SHOP_PAGE_SIZE ? `${Math.min(state.shopLimit, total)} dari ${total} produk` : `${total} produk`;
 
-// Papan lorong: kategori terpilih, kini berupa papan kecil di kepala daftar (bukan spanduk besar)
 export function aisleHtml() {
   const aisleNumber = state.categories.indexOf(state.category) + 1;
   return `<span class="aisle-sign"><span class="a-no">${aisleNumber ? 'Lorong ' + aisleNumber : 'Seluruh toko'}</span><b>${state.category ? escapeHtml(state.category) : 'Semua kategori'}</b></span>`;
 }
 
-// Rel kategori: tiap kategori memperlihatkan jumlah produk yang cocok dengan pencarian/filter saat ini
 function categoryCounts() {
   const counts = {};
   matchingProducts(true).list.forEach(p => { counts[p.category] = (counts[p.category] || 0) + 1; });
@@ -589,7 +569,6 @@ export function categoryRailHtml() {
   return chip('', 'Semua', total) + state.categories.map(category => chip(category, category, counts[category] || 0)).join('');
 }
 
-// Penanda ada kategori yang tersembunyi di kiri/kanan rel (pudar di tepi + panah di desktop)
 export function updateRailEdges() {
   const rail = $('#rail');
   const wrap = $('#rail-wrap');
@@ -607,7 +586,6 @@ export function scrollRail(direction) {
 addEventListener('resize', updateRailEdges);
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(updateRailEdges);
 
-// Chip filter aktif: kata pencarian, harga, dan stok. Setiap chip bisa dilepas satu per satu.
 function chipsHtml() {
   const chips = [];
   const query = state.query.trim();
@@ -630,7 +608,6 @@ function chipsHtml() {
   return items + clearAll;
 }
 
-// Urutan: tanpa pencarian "Nama A–Z" (auto); saat mencari "Paling relevan" jadi pilihan awal
 const sortOptionHtml = (value, label) =>
   `<option value="${value}"${state.sort === value ? ' selected' : ''}>${label}</option>`;
 
@@ -645,7 +622,7 @@ function syncSortOptions() {
   const select = $('[data-sort]');
   if (!select) return;
   const searching = Boolean(state.query.trim());
-  if (select.dataset.q === String(searching)) return;   // pilihan tidak berubah: jangan ganggu dropdown yang sedang dipakai
+  if (select.dataset.q === String(searching)) return;
   if (!searching && state.sort === 'name') state.sort = 'auto';
   select.dataset.q = String(searching);
   select.innerHTML = sortOptionsHtml();
@@ -676,7 +653,6 @@ function productCardHtml(product, index) {
     </article>`;
 }
 
-// Bagian bawah daftar: kemajuan dan tombol "Tampilkan lagi". Kartu berikutnya juga dimuat otomatis saat daftar hampir habis.
 function moreHtml(total) {
   if (total <= SHOP_PAGE_SIZE) return '';
   const shown = Math.min(state.shopLimit, total);
@@ -695,12 +671,11 @@ function productCards(firstRender = false, list = filteredProducts()) {
       hasAnyFilter() ? '<button class="btn primary" data-act="clear-all">Hapus semua filter</button>' : '');
   }
   const layout = state.layout === 'rows' ? ' rows' : '';
-  const photos = list.some(product => productImage(product)) ? ' photos' : '';   // ada foto: semua kartu berukuran sama supaya baris rata
+  const photos = list.some(product => productImage(product)) ? ' photos' : '';
   return `<div class="shelf${firstRender ? ' stagger' : ''}${layout}${photos}">${list.slice(0, state.shopLimit).map(productCardHtml).join('')}</div>
     <div class="more" id="more">${moreHtml(list.length)}</div>`;
 }
 
-// Memuat kartu secara bertahap: katalog ratusan produk tidak digambar sekaligus
 let moreObserver = null;
 
 export function watchMore() {
@@ -727,10 +702,9 @@ export function appendCards() {
   $('#more').innerHTML = moreHtml(list.length);
   const counter = $('#rcount');
   if (counter) counter.textContent = countLabel(list.length);
-  watchMore();   // dipasang ulang: bila ujung daftar masih dekat layar, tahap berikutnya langsung dimuat
+  watchMore();
 }
 
-// Sinkronkan bagian di sekitar daftar (jumlah, rel kategori, papan lorong, chip, tombol filter, urutan)
 function syncShopControls(total) {
   const setHtml = (selector, html) => { const el = $(selector); if (el) el.innerHTML = html; };
 
@@ -755,7 +729,6 @@ function syncShopControls(total) {
   updateRailEdges();
 }
 
-// Gambar ulang daftar dari awal (kata cari, kategori, urutan, atau filter berubah)
 export function renderList() {
   state.shopLimit = SHOP_PAGE_SIZE;
   const list = filteredProducts();
@@ -769,7 +742,6 @@ export function afterShopRender() {
   updateRailEdges();
 }
 
-// Jendela filter: rentang harga dan sembunyikan stok habis (jadi lembar bawah di HP)
 export function filterModal() {
   const { inStock, min, max } = state.filters;
   const prices = state.products.map(p => p.price);
@@ -831,8 +803,6 @@ function shopView() {
   <button type="button" class="to-top" data-act="to-top" aria-label="Kembali ke atas" hidden>${icon('up', 20)}</button>`;
 }
 
-// --- Keranjang ---
-
 export const cartLines = () =>
   Object.entries(state.cart)
     .map(([id, qty]) => ({ product: state.productMap[id], qty }))
@@ -851,7 +821,7 @@ function cartItemHtml({ product, qty }) {
 
 function bump(el) {
   el.classList.remove('bump');
-  void el.offsetWidth; // paksa reflow agar animasi mulai ulang
+  void el.offsetWidth;
   el.classList.add('bump');
 }
 
@@ -869,7 +839,6 @@ function renderCartBar(lines, count, total) {
   }
 }
 
-// jaga fokus keyboard saat footer kartu diganti
 function syncCardFooters() {
   $$('[data-card]').forEach(card => {
     const product = state.productMap[card.dataset.card];
@@ -893,7 +862,6 @@ function syncCardFooters() {
   });
 }
 
-// sekaligus menyimpan keranjang ke localStorage
 export function drawCart() {
   const itemsEl = $('#cart-items');
   if (!itemsEl) return;
@@ -943,8 +911,6 @@ export function setCartQty(id, qty) {
   drawCart();
 }
 
-// --- Pesanan ---
-
 function timelineHtml(status) {
   if (status === 'cancelled') return '';
   const currentIndex = status === 'completed' ? ORDER_FLOW.length : ORDER_FLOW.indexOf(status);
@@ -964,7 +930,7 @@ const statusButton = (order, status, label, cls = '') =>
 
 function staffOrderActions(order) {
   switch (order.status) {
-    case 'pending': return statusButton(order, 'paid', 'Konfirmasi pembayaran', 'primary') + statusButton(order, 'cancelled', 'Batalkan', 'danger');
+    case 'pending': return statusButton(order, 'paid', order.payment_method === 'cash' ? 'Terima pembayaran tunai' : 'Konfirmasi pembayaran', 'primary') + statusButton(order, 'cancelled', 'Batalkan', 'danger');
     case 'paid':    return statusButton(order, 'shipped', 'Tandai dikirim', 'primary') + statusButton(order, 'cancelled', 'Batalkan', 'danger');
     case 'shipped': return statusButton(order, 'completed', 'Tandai selesai', 'primary');
     default:        return '';
@@ -988,18 +954,23 @@ const orderPaymentHtml = order => paymentBoxHtml(order, 'Cara bayar');
 const orderLineHtml = item =>
   `<li><span>${escapeHtml(item.name)}</span><span class="num">${formatRupiah(item.subtotal)}</span><em class="num">${item.qty} × ${formatRupiah(item.price)}</em></li>`;
 
+const shippingLineHtml = order => order.shipping_method
+  ? `<li><span>${order.shipping_method === 'pickup' ? 'Ambil di toko' : 'Ongkos kirim'}</span><span class="num">${order.shipping_fee ? formatRupiah(order.shipping_fee) : 'Gratis'}</span></li>`
+  : '';
+
 const infoRow = (label, value) => (value ? `<div><dt>${label}</dt><dd>${value}</dd></div>` : '');
 
 function orderCardHtml(order, staff, index = 0) {
   const [statusLabel, statusColor] = STATUS[order.status];
   const justUpdated = order.id === state.justUpdatedOrderId ? ' just' : '';
   const owner = staff ? ', atas nama <b>' + escapeHtml(order.username) + '</b>' : '';
-  const info = `<dl class="r-info">${infoRow('Penerima', escapeHtml(order.recipient))}${infoRow('Kirim ke', escapeHtml(order.address))}${
+  const info = `<dl class="r-info">${infoRow('Penerima', escapeHtml(order.recipient))}${infoRow('Pengiriman', escapeHtml(SHIPPING_LABEL[order.shipping_method] || ''))}${infoRow('Pembayaran', escapeHtml(PAYMENT_LABEL[order.payment_method] || ''))}${infoRow('Kirim ke', escapeHtml(order.address))}${
     infoRow('HP/WA', order.phone ? `<span class="num">${escapeHtml(order.phone)}</span>` : '')}${
     infoRow('Catatan', escapeHtml(order.note))}</dl>`;
   const autoCancel = order.cancel_reason === 'expired'
     ? '<p class="r-auto">Dibatalkan otomatis karena melewati batas waktu bayar.</p>' : '';
-  const payment = !staff && order.status === 'pending' ? orderPaymentHtml(order) : '';
+  const payment = !staff && order.status === 'pending'
+    ? (order.payment_method === 'cash' ? cashNoteHtml(order) : order.payment_method === 'qris' ? qrisBoxHtml(order) : orderPaymentHtml(order)) : '';
 
   return `
     <article class="receipt st-${order.status}" style="--i:${Math.min(index, 8)}">
@@ -1007,7 +978,7 @@ function orderCardHtml(order, staff, index = 0) {
         <span class="muted small r-date">${formatDate(order.created_at)}${owner}</span>
         <span class="stamp ${statusColor}${justUpdated}">${statusLabel}</span></div>
       ${timelineHtml(order.status)}
-      <ul class="r-lines">${order.items.map(orderLineHtml).join('')}</ul>
+      <ul class="r-lines">${order.items.map(orderLineHtml).join('')}${shippingLineHtml(order)}</ul>
       <div class="r-total"><span>Total</span><strong class="num">${formatRupiah(order.total)}</strong></div>
       ${info}${autoCancel}
       ${payment}
@@ -1041,9 +1012,6 @@ function ordersView() {
   <div id="olist">${orderCards(state.fresh)}</div>`;
 }
 
-// --- Ringkasan ---
-
-// Kotak angka. Bila `go` diisi, kotak menjadi tombol menuju halaman yang relevan (angka 0 tidak perlu dibuka).
 function factHtml({ value, label, note = '', tone = '', wide = false, go = null }) {
   const cls = `fact${tone ? ' ' + tone : ''}${wide ? ' wide' : ''}`;
   const inner = `<b class="num">${value}</b><span>${label}${note ? `<small>${note}</small>` : ''}</span>`;
@@ -1055,7 +1023,7 @@ function factHtml({ value, label, note = '', tone = '', wide = false, go = null 
 function dashboardFactsHtml(stats) {
   const today = stats.today || { orders: 0, revenue: 0 };
   const pending = stats.orders.pending;
-  const stockTotal = stats.low_stock_total ?? stats.low_stock.length;   // total sebenarnya; daftar di bawah dibatasi
+  const stockTotal = stats.low_stock_total ?? stats.low_stock.length;
   const outCount = stats.out_of_stock_total ?? stats.low_stock.filter(product => product.stock === 0).length;
   const lowCount = stockTotal - outCount;
   const totals = state.user.role === 'master' ? stats.users : null;
@@ -1086,7 +1054,6 @@ function revenueHeroHtml(stats) {
     </div>`;
 }
 
-// Tiap batang membuka daftar pesanan dengan status itu; status kosong tidak perlu dibuka
 function orderStatusBarsHtml(stats) {
   const keys = Object.keys(STATUS);
   const max = Math.max(1, ...keys.map(key => stats.orders[key]));
@@ -1136,8 +1103,6 @@ function dashboardView() {
   </div>`;
 }
 
-// --- Produk ---
-
 function productRowHtml(product, index = 0) {
   return `<tr style="--i:${Math.min(index, 10)}"${product.stock === 0 ? ' class="prod-out"' : ''}>
     <td data-label="Produk">${productNameHtml(product)}</td>
@@ -1161,7 +1126,6 @@ export function productRows() {
   return list.map(productRowHtml).join('');
 }
 
-// Satu toolbar untuk semua cara menyaring: cari, kategori, status stok, dan jumlah hasil (sama polanya dengan halaman Log)
 function productToolsHtml() {
   const { group, category } = state.productFilter;
   const categories = [...new Set(state.products.map(product => product.category))].sort((a, b) => a.localeCompare(b, 'id'));
@@ -1187,7 +1151,6 @@ function productToolsHtml() {
 }
 
 const productsView = () => {
-  // kategori terpilih bisa hilang setelah produknya dihapus
   const { category } = state.productFilter;
   if (category && !state.products.some(product => product.category === category)) state.productFilter.category = '';
   const hasProducts = state.products.length > 0;
@@ -1236,22 +1199,18 @@ export function productModal(product) {
     </form>`);
 }
 
-// --- Pengguna ---
-
 const roleSelectHtml = user =>
   `<select class="select sm" data-change="user-role" data-id="${user.id}" aria-label="Role ${escapeHtml(user.username)}"><option value="user" ${user.role === 'user' ? 'selected' : ''}>Pelanggan</option><option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Admin</option></select>`;
 
 const activeSwitchHtml = user =>
   `<label class="sw"><input type="checkbox" data-change="user-active" data-id="${user.id}" ${user.active ? 'checked' : ''} aria-label="Aktif ${escapeHtml(user.username)}"><span></span></label>`;
 
-// Foto akun (bila ada) menggantikan inisial; bentuknya sama dengan foto produk (.mini.has-photo)
 const userMiniHtml = user => {
   const photo = avatarPhoto(user);
   return `<span class="mini${photo ? ' has-photo' : ''}">${photo ? `<img src="${photo}" alt="" decoding="async">` : escapeHtml(getInitials(user.name))}</span>`;
 };
 
 function userRowHtml(user, index = 0) {
-  // Akun master dan akun sendiri tidak bisa diubah dari sini
   const locked = user.role === 'master' || user.id === state.user.id;
   return `<tr style="--i:${Math.min(index, 10)}"><td data-label="Pengguna"><div class="cell">${userMiniHtml(user)}<div><b>${escapeHtml(user.name)}</b><div class="muted small">@${escapeHtml(user.username)}</div></div></div></td>
     <td data-label="Email">${escapeHtml(user.email)}</td>
@@ -1278,8 +1237,6 @@ export function userModal() {
       <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Buat akun</button></div></form>`);
 }
 
-// --- Akun ---
-
 export function passwordModal() {
   openModal(`<h3>Ganti password</h3><p class="sub">Setelah diganti, perangkat lain yang sedang masuk akan keluar otomatis.</p>
     <form data-form="password" novalidate><div class="form-alert" role="alert"></div>
@@ -1291,9 +1248,6 @@ export function passwordModal() {
       <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Ganti password</button></div></form>`);
 }
 
-// --- Pemulihan password: satu modal bertahap (email -> kode -> password baru -> selesai) ---
-// Semua langkah dirender sekali lalu ditampilkan bergantian, jadi isian (mis. password) tidak hilang saat pengguna kembali.
-
 const RESET_STEP_NAMES = ['Email', 'Kode', 'Password'];
 const RESET_ANNOUNCE = {
   1: 'Langkah 1 dari 3: isi email',
@@ -1303,7 +1257,6 @@ const RESET_ANNOUNCE = {
 };
 const OTP_LENGTH = 6;
 
-// Satu <input> asli (isi otomatis dari SMS/email dan tempel tetap berfungsi) dengan enam kotak hanya sebagai tampilan
 const otpHtml = () => `<div class="otp" data-otp>
         <input class="otp-input" name="code" data-digits inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" aria-describedby="otp-hint">
         <div class="otp-cells" aria-hidden="true">${Array.from({ length: OTP_LENGTH }, (_, k) => `<span class="otp-cell" style="--k:${k}"></span>`).join('')}</div>
@@ -1361,13 +1314,11 @@ export function forgotModal(email = '') {
   openModal(resetWizardHtml(email));
 }
 
-// Isi teks bantu (email tujuan, masa berlaku kode) lewat textContent supaya aman dari injeksi HTML
 export function setResetInfo({ email, expires } = {}) {
   if (email !== undefined) $$('#modal-root [data-email]').forEach(el => { el.textContent = email; });
   if (expires !== undefined) $$('#modal-root [data-expires]').forEach(el => { el.textContent = expires; });
 }
 
-// Enam kotak mengikuti isi <input>: digit muncul membal, kotak aktif punya kursor
 export function renderOtp(wrap) {
   const input = $('.otp-input', wrap);
   if (!input) return;
@@ -1384,7 +1335,7 @@ export function renderOtp(wrap) {
     cell.classList.toggle('active', focused && index === activeIndex);
     if (index >= previous && index < value.length) {
       cell.classList.remove('pop');
-      void cell.offsetWidth;   // paksa reflow agar animasi mulai ulang
+      void cell.offsetWidth;
       cell.classList.add('pop');
     }
   });
@@ -1393,7 +1344,6 @@ export function renderOtp(wrap) {
   if (value.length < cells.length) wrap.classList.remove('wave');
 }
 
-// Penanda langkah: garis penghubung terisi, langkah selesai berubah jadi centang
 function setStepper(wz, step) {
   $$('.wz-steps li', wz).forEach(li => {
     const n = Number(li.dataset.s);
@@ -1412,7 +1362,6 @@ function setStepper(wz, step) {
   });
 }
 
-// Judul langkah yang sedang tampil menjadi nama dialog (dibaca pembaca layar)
 function markTitle(wz, panel) {
   $$('h3', wz).forEach(heading => heading.removeAttribute('id'));
   const heading = $('h3', panel);
@@ -1429,7 +1378,6 @@ function focusPanel(panel) {
   if (target) target.focus();
 }
 
-// Judul, teks, kolom isian, dan tombol muncul satu per satu dari arah perpindahan
 function staggerPanel(panel, direction) {
   if (reducedMotion.matches) return;
   const parts = $$(':scope > h3, :scope > p, :scope > form > *, :scope > .done > *', panel)
@@ -1440,7 +1388,6 @@ function staggerPanel(panel, direction) {
   ));
 }
 
-// Konfeti kecil setelah centang selesai tergambar
 function celebrate(panel) {
   setTimeout(() => {
     const mark = $('.done-ic', panel);
@@ -1448,8 +1395,6 @@ function celebrate(panel) {
   }, 420);
 }
 
-// Pindah langkah: isi lama keluar, tinggi modal menyesuaikan dengan mulus, isi baru masuk berurutan.
-// Panggilan beruntun aman: yang terakhir menang dan panel yang sedang tampil selalu dibaca dari DOM.
 let wizardToken = 0;
 
 export async function showResetStep(step) {
@@ -1466,7 +1411,7 @@ export async function showResetStep(step) {
   const live = $('#wz-live', wz);
   if (live) live.textContent = RESET_ANNOUNCE[step] || '';
 
-  if (current === next) {   // sudah di langkah ini (mis. tekan dua kali): batalkan animasi keluar yang tertunda
+  if (current === next) {
     next.getAnimations().forEach(animation => animation.cancel());
     next.style.pointerEvents = '';
     body.style.overflow = '';
@@ -1492,14 +1437,14 @@ export async function showResetStep(step) {
 
   const fromHeight = body.offsetHeight;
   body.getAnimations().forEach(animation => animation.cancel());
-  body.style.overflow = 'clip';        // geseran samping tidak boleh memunculkan scrollbar
+  body.style.overflow = 'clip';
   current.style.pointerEvents = 'none';
   try {
     await current.animate(
       [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-direction * 18}px)` }],
       { duration: 110, easing: 'ease-in', fill: 'forwards' }
     ).finished;
-  } catch { return; }                  // dibatalkan oleh panggilan berikutnya
+  } catch { return; }
   if (token !== wizardToken || !wz.isConnected) return;
 
   reveal();
@@ -1511,8 +1456,6 @@ export async function showResetStep(step) {
   setTimeout(() => { if (token === wizardToken) body.style.overflow = ''; }, 320);
 }
 
-// --- Log ---
-
 function logRowHtml(log, index = 0) {
   const picked = state.selectedLogs.has(log.id);
   const alert = logTone(log.action) === 'err';
@@ -1523,7 +1466,6 @@ function logRowHtml(log, index = 0) {
     <td data-label="Hapus" class="row-del"><button type="button" class="btn sm flat log-del" data-act="log-del" data-id="${log.id}" aria-label="Hapus log ${escapeHtml(actionLabel(log.action))}" title="Hapus log ini">${icon('trash', 16)}</button></td></tr>`;
 }
 
-// Isi bilah status di toolbar: jumlah log yang tampil, atau tombol hapus bila ada yang dicentang
 function logActionsHtml() {
   const count = state.selectedLogs.size;
   if (!count) {
@@ -1536,13 +1478,11 @@ function logActionsHtml() {
     <button type="button" class="btn sm solid-danger" data-act="log-del-selected">${icon('trash', 15)} Hapus ${count} log</button>`;
 }
 
-// Perbarui toolbar dan centang tanpa menggambar ulang tabel (fokus keyboard tidak hilang)
 export function syncLogSelection() {
-  const boxes = $$('[data-act="log-pick-all"]');   // di kepala tabel, dan di toolbar untuk layar sempit
+  const boxes = $$('[data-act="log-pick-all"]');
   const actions = $('#log-actions');
   if (!boxes.length || !actions) return;
 
-  // "Pilih semua" hanya menghitung log yang sedang tampil (bisa difilter)
   const visible = visibleLogIds();
   const pickedVisible = visible.filter(id => state.selectedLogs.has(id)).length;
   for (const box of boxes) {
@@ -1560,10 +1500,8 @@ export function syncLogSelection() {
   refreshLogGrid();
 }
 
-// Dipanggil setelah halaman Log digambar: tabel diganti Webix bila tersedia (lihat logs-grid.js)
 export const afterLogsRender = () => mountLogGrid(syncLogSelection);
 
-// Toolbar: cari, saring menurut aksi, kelompok cepat, dan status/hapus banyak
 function logToolsHtml() {
   const { q, group, action } = state.logFilter;
   const actions = [...new Set(state.logs.map(log => log.action))]
@@ -1591,7 +1529,6 @@ function logToolsHtml() {
 }
 
 const logsView = () => {
-  // aksi yang dipilih bisa hilang setelah log dihapus: lepas filternya supaya tabel tidak kosong tanpa sebab
   if (state.logFilter.action && !state.logs.some(log => log.action === state.logFilter.action)) state.logFilter.action = '';
   return `
   <div class="page-head"><div><h2>Log aktivitas</h2><p class="muted">${state.logs.length} aktivitas terakhir di toko.</p></div><button class="btn" data-act="reload">Perbarui data</button></div>

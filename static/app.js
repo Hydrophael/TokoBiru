@@ -1,11 +1,11 @@
-// TokoBiru - pintu masuk frontend: alur aplikasi, aksi, form, dan event
-
 import {
   $,
   $$,
   ADDRESS_LIMIT,
   MAX_CART_QTY,
   NAV,
+  PAYMENT_LABEL,
+  SHIPPING_LABEL,
   STORAGE_KEYS,
   api,
   cartQty,
@@ -19,9 +19,11 @@ import {
   icon,
   isCustomer,
   newRequestKey,
+  paymentChoices,
   priceHtml,
   productEmoji,
   productImage,
+  shippingFeeFor,
   state,
   stockInfo,
   storage,
@@ -32,6 +34,7 @@ import {
   closeModal,
   confirmAccepted,
   confirmDialog,
+  burst,
   EASE,
   flyToCart,
   openModal,
@@ -40,7 +43,7 @@ import {
   withTransition
 } from './ui.js';
 import { choosePhoto, clearPhoto, handlePhotoInput } from './photo.js';
-import './layout.js';   // tata letak kartu pesanan yang rapat (tanpa ruang kosong)
+import './layout.js';
 import { applySettings, installApp, loadSettings, setTextSize, setTheme, settingsModal, syncInstall, toggleSetting } from './settings.js';
 import { applyLogFilter, visibleLogIds } from './logs-grid.js';
 import { applyProductFilter } from './products-grid.js';
@@ -60,56 +63,88 @@ import {
   orderCards,
   orderRailHtml,
   passwordModal,
-  profileModal,
-  refreshProfileMenu,
   productModal,
+  profileModal,
+  qrisPaidHtml,
+  refreshProfileMenu,
   renderAuth,
   renderList,
   renderOtp,
   renderShell,
   scrollRail,
   setCartQty,
-  updateRailEdges,
   setResetInfo,
   showOrderSuccess,
-  syncLogSelection,
   showResetStep,
+  syncLogSelection,
+  updateRailEdges,
   userModal,
   views
 } from './views.js';
 
+const MOBILE = matchMedia('(max-width:780px)');
 
-// Sesi habis (401): kembali ke halaman masuk
+const MIN_SERVER_SEARCH = 2;
+const SEARCH_DEBOUNCE_MS = 200;
+const LOG_SEARCH_DEBOUNCE_MS = 150;
+
+const CHECKOUT_KEY_TTL_MS = 10 * 60 * 1000;
+
+const PHONE_RE = /^\+?\d{8,15}$/;
+const PHONE_ERROR = 'Isi nomor HP yang benar, contoh 081234567890';
+const RECIPIENT_ERROR = 'Nama penerima minimal 2 karakter';
+const CODE_REJECTED = 'Kode salah atau sudah kedaluwarsa. Periksa lagi, atau kirim ulang kode.';
+
+let cartReturnFocus = null;
+let searchDebounce = 0;
+let searchSeq = 0;
+let logSearchTimer = 0;
+let resendTimer = null;
+let otpTimer = null;
+
+
+const emptyFilters = () => ({ inStock: false, min: null, max: null });
+const emptyLogFilter = () => ({ q: '', group: '', action: '' });
+const emptyProductFilter = () => ({ group: '', category: '' });
+
+const cleanText = value => String(value || '').trim();
+const normalizePhone = value => String(value || '').replace(/[\s.-]/g, '');
+
+const myAddresses = () => state.user.addresses || [];
+const findAddress = id => myAddresses().find(item => item.id === id);
+
+const validationError = fields => createError('Periksa kembali isian Anda', { fields });
+
+
 hooks.onSessionExpired = () => {
   state.user = null;
   renderAuth();
   toast('Sesi berakhir. Masuk lagi untuk melanjutkan.', 'err');
-  // sesi di server sudah dibersihkan, jadi token CSRF lama tidak berlaku lagi untuk login berikutnya
   api('/auth/me').then(me => { state.csrf = me.csrf; }).catch(() => { });
 };
 
-// === Alur aplikasi: sesi, navigasi, pemuatan data ===
-
-async function onAuthed(result) {
-  state.csrf = result.csrf;
-  state.user = result.user;
-  state.cart = storage.get(STORAGE_KEYS.cart(result.user.id)) || {};
+async function startSession(user) {
+  state.user = user;
+  state.cart = storage.get(STORAGE_KEYS.cart(user.id)) || {};
   await migrateLocalAddress();
   await show(defaultView());
 }
 
-// Versi lama menyimpan HP dan alamat di perangkat (localStorage). Bila akun belum punya alamat, data itu dipindah
-// ke akun sekali, lalu dihapus dari perangkat. Gagal pun tidak masalah: data lama dibiarkan dan dicoba lagi nanti.
+async function onAuthed(result) {
+  state.csrf = result.csrf;
+  await startSession(result.user);
+}
+
 async function migrateLocalAddress() {
   if (!isCustomer()) return;
   const key = STORAGE_KEYS.profile(state.user.id);
   const old = storage.get(key);
   if (!old) return;
-  if ((state.user.addresses || []).length) { storage.remove(key); return; }   // akun sudah punya alamat: data lama tidak dipakai
+  if (myAddresses().length) { storage.remove(key); return; }
 
-  const phone = String(old.phone || '').replace(/[\s.-]/g, '');
-  const address = String(old.address || '').trim();
-  if (!/^\+?\d{8,15}$/.test(phone) || address.length < 5) { storage.remove(key); return; }   // data lama tidak lengkap
+  const phone = normalizePhone(old.phone);
+  const address = cleanText(old.address);
+  if (!PHONE_RE.test(phone) || address.length < 5) { storage.remove(key); return; }
   try {
     const result = await api('/auth/addresses', {
       method: 'POST',
@@ -117,7 +152,25 @@ async function migrateLocalAddress() {
     });
     state.user.addresses = result.addresses;
     storage.remove(key);
-  } catch { /* dicoba lagi saat masuk berikutnya */ }
+  } catch { }
+}
+
+async function logout() {
+  setProfileMenu(false);
+  try {
+    const result = await api('/auth/logout', { method: 'POST', body: {} });
+    state.csrf = result.csrf;
+  } catch { }
+
+  state.user = null;
+  state.cart = {};
+  state.checkout = null;
+  state.query = '';
+  state.searchIds = null;
+  state.category = '';
+  state.filters = emptyFilters();
+  renderAuth('login');
+  toast('Anda sudah keluar');
 }
 
 async function loadProducts() {
@@ -127,7 +180,6 @@ async function loadProducts() {
   state.productsTotal = result.total ?? result.products.length;
   state.productMap = Object.fromEntries(result.products.map(p => [p.id, p]));
 
-  // Sesuaikan keranjang dengan katalog terbaru: buang produk yang hilang atau habis, batasi jumlah ke stok
   let adjusted = 0;
   Object.keys(state.cart).forEach(id => {
     const product = state.productMap[id];
@@ -145,9 +197,7 @@ const loaders = {
   async dashboard() { state.stats = await api('/stats'); },
   async users() { state.users = (await api('/users')).users; },
   async logs() {
-    // "log_hapus" tidak ditampilkan (pengaman bila server masih berkode lama atau ada baris lama)
     state.logs = (await api('/logs')).logs.filter(log => log.action !== 'log_hapus');
-    // buang centang untuk log yang sudah tidak ada
     const present = new Set(state.logs.map(log => log.id));
     state.selectedLogs.forEach(id => { if (!present.has(id)) state.selectedLogs.delete(id); });
   }
@@ -160,10 +210,10 @@ async function show(view) {
   state.view = view;
   state.query = '';
   state.searchIds = null;
-  state.logFilter = { q: '', group: '', action: '' };   // filter Log dimulai bersih tiap halaman dibuka
-  state.productFilter = { group: '', category: '' };
+  state.logFilter = emptyLogFilter();
+  state.productFilter = emptyProductFilter();
   state.fresh = true;
-  applySettings();   // pilihan ukuran teks bergantung pada peran pengguna yang baru masuk
+  applySettings();
   renderShell();
   window.scrollTo(0, 0);
   await reload();
@@ -173,7 +223,7 @@ async function reload() {
   try {
     await loaders[state.view]();
     const content = $('#content');
-    content.classList.toggle('fresh', state.fresh);   // animasi masuk hanya saat halaman baru dibuka
+    content.classList.toggle('fresh', state.fresh);
     content.innerHTML = views[state.view]();
     if (state.view === 'dashboard') animateDashboard(content);
     if (state.view === 'shop') afterShopRender();
@@ -182,12 +232,13 @@ async function reload() {
     if (isCustomer()) drawCart();
     if (state.fresh) setTimeout(() => $$('#content .stagger').forEach(el => el.classList.remove('stagger')), 1200);
   } catch (err) {
-    if (err.status === 401) return; // sesi berakhir sudah ditangani di api()
+    if (err.status === 401) return;
     $('#content').innerHTML = `<div class="empty"><b>Data belum bisa dimuat</b><p>${escapeHtml(err.message)}</p><button class="btn" data-act="reload">Coba lagi</button></div>`;
   } finally {
     state.fresh = false;
   }
 }
+
 
 function addOneToCart(el) {
   const id = el.dataset.id;
@@ -199,9 +250,14 @@ function addOneToCart(el) {
   setCartQty(id, current + 1);
 }
 
-// === Aksi (handler data-act, dipanggil dari onClick) ===
+function removeFromCart(el) {
+  const id = el.dataset.id;
+  const qty = state.cart[id];
+  const name = state.productMap[id].name;
 
-let cartReturnFocus = null;  // fokus yang dikembalikan saat laci keranjang ditutup
+  setCartQty(id, 0);
+  toast(`${name} dihapus dari keranjang`, '', { label: 'Urungkan', fn: () => setCartQty(id, qty) });
+}
 
 function openCart() {
   cartReturnFocus = document.activeElement;
@@ -209,7 +265,6 @@ function openCart() {
   $('#scrim').classList.add('open');
   document.documentElement.classList.add('lock');
 
-  // isi keranjang masuk bergantian setelah laci terbuka
   if (!reducedMotion.matches) {
     $$('#cart-items .citem').slice(0, 8).forEach((el, index) => el.animate(
       [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }],
@@ -217,8 +272,7 @@ function openCart() {
     ));
   }
 
-  const closeButton = $('#drawer .drawer-head button');
-  if (closeButton) closeButton.focus();
+  $('#drawer .drawer-head button')?.focus();
 }
 
 function closeCart() {
@@ -232,143 +286,23 @@ function closeCart() {
   cartReturnFocus = null;
 }
 
-// --- Menu profil (kanan atas) ---
+function reorder(el) {
+  const order = state.orders.find(o => o.id === el.dataset.id);
+  if (!order) return;
 
-const profileMenuOpen = () => Boolean($('#app .pm-pop:not([hidden])'));
-
-function setProfileMenu(open, { focus = false } = {}) {
-  const root = $('#app .pm');
-  if (!root) return;
-  const button = $('.pm-btn', root);
-  $('.pm-pop', root).hidden = !open;
-  root.classList.toggle('open', open);
-  $('#app .top')?.classList.toggle('menu-open', open);   // di HP lembar menu harus di atas bilah menu bawah
-  button.setAttribute('aria-expanded', String(open));
-  if (open) { syncInstall(); $('[role=menuitem]:not([hidden])', root)?.focus(); }
-  else if (focus) button.focus();
-}
-
-// fokus dikembalikan ke tombol dulu, supaya modal yang terbuka sesudahnya mengembalikan fokus ke tombol itu
-function openProfile() { setProfileMenu(false, { focus: true }); profileModal(); }
-function openPassword() { setProfileMenu(false, { focus: true }); passwordModal(); }
-
-async function logout() {
-  setProfileMenu(false);
-  try {
-    const result = await api('/auth/logout', { method: 'POST', body: {} });
-    state.csrf = result.csrf;
-  } catch { /* tetap keluar di sisi klien */ }
-
-  state.user = null;
-  state.cart = {};
-  state.checkout = null;
-  state.query = '';
-  state.searchIds = null;
-  state.category = '';
-  state.filters = { inStock: false, min: null, max: null };
-  renderAuth('login');
-  toast('Anda sudah keluar');
-}
-
-// Daftar sudah digulir jauh ke bawah lalu filter berubah: kembali ke kepala daftar supaya hasil baru terlihat
-function keepResultsInView() {
-  const head = $('.results-head');
-  if (!head) return;
-  const top = head.getBoundingClientRect().top + scrollY - ($('#tools')?.offsetHeight || 0) - 80;
-  if (scrollY > top) window.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
-}
-
-function filterByCategory(el) {
-  state.category = el.dataset.cat;
-  withTransition(() => {
-    renderList();
-    keepResultsInView();
-
-    const active = $('#rail .active');
-    if (active) {
-      active.focus({ preventScroll: true });
-      active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
-    }
+  let added = 0;
+  let skipped = 0;
+  order.items.forEach(item => {
+    const product = state.productMap[item.product_id];
+    if (!product || product.stock === 0) { skipped++; return; }
+    state.cart[product.id] = Math.min(cartQty(product.id) + item.qty, product.stock, MAX_CART_QTY);
+    added++;
   });
-}
 
-function resetShopQuery() {
-  clearTimeout(searchDebounce);
-  searchSeq++;                 // hasil server yang datang terlambat diabaikan
-  state.query = '';
-  state.searchIds = null;
-  const input = $('[data-input=shop-search]');
-  if (input) input.value = '';
-}
-
-function clearSearch() {
-  resetShopQuery();
-  const input = $('[data-input=shop-search]');
-  if (input) input.focus();
-  withTransition(() => { renderList(); keepResultsInView(); });
-}
-
-function clearAllFilters() {
-  resetShopQuery();
-  state.category = '';
-  state.filters = { inStock: false, min: null, max: null };
-  withTransition(() => { renderList(); keepResultsInView(); });
-}
-
-function removeFilter(el) {
-  const kind = el.dataset.f;
-  if (kind === 'q') return clearSearch();
-  if (kind === 'price') { state.filters.min = null; state.filters.max = null; }
-  if (kind === 'stock') state.filters.inStock = false;
-  withTransition(() => { renderList(); keepResultsInView(); });
-}
-
-function applyFilters() {
-  const readPrice = selector => {
-    const digits = ($(selector).value || '').replace(/\D/g, '').slice(0, 12);
-    return digits ? Number(digits) : null;
-  };
-  let min = readPrice('#f-min');
-  let max = readPrice('#f-max');
-  if (min !== null && max !== null && min > max) [min, max] = [max, min];   // terbalik: tukar saja
-
-  state.filters = { inStock: $('#f-stock').checked, min, max };
-  closeModal();
-  withTransition(() => { renderList(); keepResultsInView(); });
-}
-
-function resetFilters() {
-  state.filters = { inStock: false, min: null, max: null };
-  closeModal();
-  withTransition(() => { renderList(); keepResultsInView(); });
-}
-
-function setLayout(el) {
-  state.layout = el.dataset.layout === 'rows' ? 'rows' : 'grid';
-  storage.set(STORAGE_KEYS.layout, state.layout);
-  $$('[data-act=layout]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.layout === state.layout)));
-  const shelf = $('#plist .shelf');
-  if (shelf) shelf.classList.toggle('rows', state.layout === 'rows');
-}
-
-function loadMoreProducts() {
-  const hadFocus = document.activeElement?.matches?.('[data-act=more]');
-  const before = $$('#plist [data-card]').length;
-  appendCards();
-
-  // tombol diganti saat tahap berikutnya masuk: fokus keyboard pindah ke kartu pertama yang baru
-  const firstNew = $$('#plist [data-card]')[before];
-  if (hadFocus && firstNew) $('.plink', firstNew).focus({ preventScroll: true });
-}
-
-function filterOrders(el) {
-  state.orderFilter = el.dataset.s;
-  withTransition(() => {
-    $('#orail').innerHTML = orderRailHtml();
-    $('#olist').innerHTML = orderCards();
-    const active = $('#orail .active');
-    if (active) active.focus({ preventScroll: true });
-  });
+  drawCart();
+  if (!added) return toast('Barang pada pesanan ini sedang tidak tersedia', 'err');
+  toast(added + ' barang masuk keranjang' + (skipped ? ', ' + skipped + ' tidak tersedia' : ''));
+  openCart();
 }
 
 function openProductDetail(el) {
@@ -395,45 +329,117 @@ function addFromProductDetail(el) {
   setCartQty(id, current + 1);
 }
 
-function removeFromCart(el) {
-  const id = el.dataset.id;
-  const qty = state.cart[id];
-  const name = state.productMap[id].name;
-
-  setCartQty(id, 0);
-  toast(`${name} dihapus dari keranjang`, '', { label: 'Urungkan', fn: () => setCartQty(id, qty) });
+function keepResultsInView() {
+  const head = $('.results-head');
+  if (!head) return;
+  const top = head.getBoundingClientRect().top + scrollY - ($('#tools')?.offsetHeight || 0) - 80;
+  if (scrollY > top) window.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
 }
 
-function openCheckout() {
-  const lines = cartLines();
-  if (!lines.length) return;
+const rerenderShop = () => withTransition(() => { renderList(); keepResultsInView(); });
 
-  closeCart();
-  const total = cartTotal(lines);
-  const addresses = state.user.addresses || [];
-  const picked = addresses.find(item => item.main) || addresses[0] || null;
-  const start = picked || { recipient: state.user.name, phone: '', address: '' };
-  const summary = lines.map(({ product, qty }) =>
-    `<li><span>${productEmoji(product)} ${escapeHtml(product.name)} <em>× ${qty}</em></span><b class="num">${formatRupiah(product.price * qty)}</b></li>`
-  ).join('');
-  const payNote = state.payInfo
-    ? `<div class="r-note">Bayar ke: <b>${escapeHtml(state.payInfo)}</b>. Pesanan diproses setelah admin mengonfirmasi pembayaran.</div>`
-    : '';
+function filterByCategory(el) {
+  state.category = el.dataset.cat;
+  withTransition(() => {
+    renderList();
+    keepResultsInView();
 
-  openModal(`<h3>Buat pesanan</h3><p class="sub">${lines.length} produk, total <b class="num">${formatRupiah(total)}</b></p>
-      <ul class="sum">${summary}</ul>
-      <form data-form="checkout" novalidate><div class="form-alert" role="alert"></div>
-        ${addressPickerHtml(addresses, picked)}
-        <div class="field"><label>Nama penerima</label><input class="input" name="recipient" required maxlength="50" autocomplete="name" value="${escapeHtml(start.recipient)}"></div>
-        <div class="field"><label>Nomor HP / WhatsApp</label><input class="input" name="phone" type="tel" inputmode="tel" required maxlength="20" placeholder="Contoh: 081234567890" autocomplete="tel" value="${escapeHtml(start.phone)}"></div>
-        <div class="field"><label>Alamat pengiriman</label><textarea class="input" name="address" required minlength="5" maxlength="160" placeholder="Nama jalan, nomor, kota" autocomplete="street-address">${escapeHtml(start.address)}</textarea></div>
-        ${saveAddressHtml(addresses)}
-        <div class="field"><label>Catatan untuk penjual (opsional)</label><input class="input" name="note" maxlength="200"></div>
-        ${payNote}
-        <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Buat pesanan (${formatRupiah(total)})</button></div></form>`);
+    const active = $('#rail .active');
+    if (active) {
+      active.focus({ preventScroll: true });
+      active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+    }
+  });
 }
 
-// Pilihan alamat tersimpan di form checkout. Memilihnya mengisi nama, HP, dan alamat di bawahnya (tetap bisa diubah).
+function resetShopQuery() {
+  clearTimeout(searchDebounce);
+  searchSeq++;
+  state.query = '';
+  state.searchIds = null;
+  const input = $('[data-input=shop-search]');
+  if (input) input.value = '';
+}
+
+function clearSearch() {
+  resetShopQuery();
+  $('[data-input=shop-search]')?.focus();
+  rerenderShop();
+}
+
+function clearAllFilters() {
+  resetShopQuery();
+  state.category = '';
+  state.filters = emptyFilters();
+  rerenderShop();
+}
+
+function removeFilter(el) {
+  const kind = el.dataset.f;
+  if (kind === 'q') return clearSearch();
+  if (kind === 'price') { state.filters.min = null; state.filters.max = null; }
+  if (kind === 'stock') state.filters.inStock = false;
+  rerenderShop();
+}
+
+function applyFilters() {
+  const readPrice = selector => {
+    const digits = ($(selector).value || '').replace(/\D/g, '').slice(0, 12);
+    return digits ? Number(digits) : null;
+  };
+  let min = readPrice('#f-min');
+  let max = readPrice('#f-max');
+  if (min !== null && max !== null && min > max) [min, max] = [max, min];
+
+  state.filters = { inStock: $('#f-stock').checked, min, max };
+  closeModal();
+  rerenderShop();
+}
+
+function resetFilters() {
+  state.filters = emptyFilters();
+  closeModal();
+  rerenderShop();
+}
+
+function setLayout(el) {
+  state.layout = el.dataset.layout === 'rows' ? 'rows' : 'grid';
+  storage.set(STORAGE_KEYS.layout, state.layout);
+  $$('[data-act=layout]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.layout === state.layout)));
+  $('#plist .shelf')?.classList.toggle('rows', state.layout === 'rows');
+}
+
+function loadMoreProducts() {
+  const hadFocus = document.activeElement?.matches?.('[data-act=more]');
+  const before = $$('#plist [data-card]').length;
+  appendCards();
+
+  const firstNew = $$('#plist [data-card]')[before];
+  if (hadFocus && firstNew) $('.plink', firstNew).focus({ preventScroll: true });
+}
+
+async function searchOnServer(raw) {
+  const query = raw.trim();
+  const seq = ++searchSeq;
+  if (query.length < MIN_SERVER_SEARCH) return;
+
+  try {
+    const result = await api('/products?q=' + encodeURIComponent(query));
+    if (seq !== searchSeq || state.view !== 'shop' || state.query.trim() !== query) return;
+    state.searchIds = result.products.map(product => product.id);
+    renderList();
+  } catch {
+    if (seq === searchSeq) state.searchIds = null;
+  }
+}
+
+function runShopSearch() {
+  state.searchIds = null;
+  renderList();
+  keepResultsInView();
+  searchOnServer(state.query);
+}
+
 const shortText = (text, max = 42) => {
   const flat = String(text).replace(/\s+/g, ' ').trim();
   return flat.length > max ? flat.slice(0, max - 1) + '…' : flat;
@@ -446,16 +452,70 @@ function addressPickerHtml(addresses, picked) {
   return `<div class="field"><label>Kirim ke</label><select class="select" data-addr-pick>${options}<option value="">Alamat lain…</option></select></div>`;
 }
 
-// Kotak "Simpan alamat": tampil dan tercentang untuk pelanggan yang belum punya alamat; bila sudah punya, hanya muncul
-// saat memilih "Alamat lain" (dan daftar belum penuh)
 function saveAddressHtml(addresses) {
   const first = addresses.length === 0;
   return `<label class="save-addr" data-save-addr${first ? '' : ' hidden'}><input type="checkbox" class="tick" name="save_address" value="1"${first ? ' checked' : ''}> Simpan alamat ini di akun saya</label>`;
 }
 
+function openCheckout() {
+  const lines = cartLines();
+  if (!lines.length) return;
+
+  closeCart();
+  const subtotal = cartTotal(lines);
+  const fee = shippingFeeFor(subtotal, 'delivery');
+  const addresses = myAddresses();
+  const picked = addresses.find(item => item.main) || addresses[0] || null;
+  const start = picked || { recipient: state.user.name, phone: '', address: '' };
+  const summary = lines.map(({ product, qty }) =>
+    `<li><span>${productEmoji(product)} ${escapeHtml(product.name)} <em>× ${qty}</em></span><b class="num">${formatRupiah(product.price * qty)}</b></li>`
+  ).join('');
+  const options = labels => Object.entries(labels).map(([value, text]) => `<option value="${value}">${text}</option>`).join('');
+  const freeHint = state.shipping.fee && state.shipping.freeMin
+    ? `<p class="muted small" style="margin:-6px 0 12px">Gratis ongkir untuk belanja mulai ${formatRupiah(state.shipping.freeMin)}.</p>` : '';
+  const transferNote = state.payInfo
+    ? `<div class="r-note" data-co-note="transfer">Bayar ke: <b>${escapeHtml(state.payInfo)}</b>. Pesanan diproses setelah admin mengonfirmasi pembayaran.</div>`
+    : '';
+  const cashNote = '<div class="r-note" data-co-note="cash" hidden>Bayar tunai saat pesanan diterima atau diambil. Siapkan uang pas bila bisa.</div>';
+  const qrisNote = '<div class="r-note" data-co-note="qris" hidden>Kode QRIS tampil setelah pesanan dibuat. Scan, dan pesanan langsung berstatus dibayar.</div>';
+
+  openModal(`<h3>Buat pesanan</h3><p class="sub">${lines.length} produk, total <b class="num" data-co-total>${formatRupiah(subtotal + fee)}</b></p>
+      <ul class="sum">${summary}<li><span data-co-ship-label>Ongkos kirim</span><b class="num" data-co-ship>${fee ? formatRupiah(fee) : 'Gratis'}</b></li></ul>
+      <form data-form="checkout" novalidate><div class="form-alert" role="alert"></div>
+        <div class="field"><label>Pengiriman</label><select class="select" name="shipping_method" data-co-pick>${options(SHIPPING_LABEL)}</select></div>
+        ${freeHint}
+        <div data-co-addr>${addressPickerHtml(addresses, picked)}</div>
+        <div class="field"><label>Nama penerima</label><input class="input" name="recipient" required maxlength="50" autocomplete="name" value="${escapeHtml(start.recipient)}"></div>
+        <div class="field"><label>Nomor HP / WhatsApp</label><input class="input" name="phone" type="tel" inputmode="tel" required maxlength="20" placeholder="Contoh: 081234567890" autocomplete="tel" value="${escapeHtml(start.phone)}"></div>
+        <div data-co-addr>
+          <div class="field"><label>Alamat pengiriman</label><textarea class="input" name="address" required minlength="5" maxlength="160" placeholder="Nama jalan, nomor, kota" autocomplete="street-address">${escapeHtml(start.address)}</textarea></div>
+          ${saveAddressHtml(addresses)}
+        </div>
+        <div class="field"><label>Catatan untuk penjual (opsional)</label><input class="input" name="note" maxlength="200"></div>
+        <div class="field"><label>Pembayaran</label><select class="select" name="payment_method" data-co-pick>${options(paymentChoices())}</select></div>
+        ${transferNote}${cashNote}${qrisNote}
+        <div class="foot"><button type="button" class="btn" data-act="close-modal">Batal</button><button type="submit" class="btn primary">Buat pesanan (${formatRupiah(subtotal + fee)})</button></div></form>`);
+}
+
+function updateCheckout(form) {
+  const subtotal = cartTotal(cartLines());
+  const shipping = form.elements.shipping_method.value;
+  const payment = form.elements.payment_method.value;
+  const fee = shippingFeeFor(subtotal, shipping);
+  const total = formatRupiah(subtotal + fee);
+  const modal = form.closest('.modal');
+
+  $('[data-co-total]', modal).textContent = total;
+  $('[data-co-ship-label]', modal).textContent = shipping === 'pickup' ? 'Ambil di toko' : 'Ongkos kirim';
+  $('[data-co-ship]', modal).textContent = fee ? formatRupiah(fee) : 'Gratis';
+  $$('[data-co-addr]', form).forEach(el => { el.hidden = shipping === 'pickup'; });
+  $$('[data-co-note]', form).forEach(el => { el.hidden = el.dataset.coNote !== payment; });
+  $('button[type=submit]', form).textContent = `Buat pesanan (${total})`;
+}
+
 function pickCheckoutAddress(select) {
   const form = select.closest('form');
-  const item = (state.user.addresses || []).find(a => a.id === select.value);
+  const item = findAddress(select.value);
   const set = (name, value) => { const input = form.elements[name]; if (input) input.value = value; };
   set('recipient', item ? item.recipient : state.user.name);
   set('phone', item ? item.phone : '');
@@ -463,39 +523,39 @@ function pickCheckoutAddress(select) {
 
   const save = $('[data-save-addr]', form);
   if (save) {
-    const offer = !item && (state.user.addresses || []).length < ADDRESS_LIMIT;
+    const offer = !item && myAddresses().length < ADDRESS_LIMIT;
     save.hidden = !offer;
     const box = $('input', save);
     if (box && !offer) box.checked = false;
   }
 }
 
-async function copyToClipboard(el) {
-  try {
-    await navigator.clipboard.writeText(el.dataset.text);
-    toast(el.dataset.label + ' disalin');
-  } catch {
-    toast('Tidak bisa menyalin, salin manual', 'err');
-  }
+// Satu percobaan checkout memakai kunci yang sama, supaya klik ganda tidak membuat pesanan ganda
+function checkoutKey(items, ...options) {
+  const signature = JSON.stringify([items, ...options]);
+  const current = state.checkout;
+  const fresh = current && current.signature === signature && Date.now() - current.at < CHECKOUT_KEY_TTL_MS;
+  if (!fresh) state.checkout = { signature, key: newRequestKey(), at: Date.now() };
+  return state.checkout.key;
 }
 
-function reorder(el) {
-  const order = state.orders.find(o => o.id === el.dataset.id);
-  if (!order) return;
-
-  let added = 0;
-  let skipped = 0;
-  order.items.forEach(item => {
-    const product = state.productMap[item.product_id];
-    if (!product || product.stock === 0) { skipped++; return; }
-    state.cart[product.id] = Math.min(cartQty(product.id) + item.qty, product.stock, MAX_CART_QTY);
-    added++;
-  });
-
+async function refreshAfterStockConflict(err) {
+  closeModal();
+  toast(err.message, 'err');
+  if (state.view === 'shop') await reload();
+  else await loadProducts();
   drawCart();
-  if (!added) return toast('Barang pada pesanan ini sedang tidak tersedia', 'err');
-  toast(added + ' barang masuk keranjang' + (skipped ? ', ' + skipped + ' tidak tersedia' : ''));
   openCart();
+}
+
+
+function filterOrders(el) {
+  state.orderFilter = el.dataset.s;
+  withTransition(() => {
+    $('#orail').innerHTML = orderRailHtml();
+    $('#olist').innerHTML = orderCards();
+    $('#orail .active')?.focus({ preventScroll: true });
+  });
 }
 
 async function changeOrderStatus(el) {
@@ -520,7 +580,69 @@ async function changeOrderStatus(el) {
   }
 }
 
-// konfirmasi dulu, lalu hapus lewat API dan muat ulang halaman
+const QRIS_POLL_MS = 2500;
+let qrisBusy = false;
+
+function showQrisResult(id, status) {
+  const boxes = $$('[data-qris]').filter(box => box.dataset.qris === id);
+  if (!boxes.length) return;
+
+  for (const box of boxes) {
+    if (status === 'cancelled') {
+      box.innerHTML = '<div class="qris-ok bad"><b>Pesanan dibatalkan</b><span>Waktu bayar habis atau pesanan dibatalkan.</span></div>';
+    } else {
+      box.innerHTML = qrisPaidHtml();
+      box.classList.add('paid');
+      burst($('.done-ic', box));
+    }
+    box.removeAttribute('data-qris');
+  }
+  const order = state.orders.find(item => item.id === id);
+  if (order) order.status = status;
+  if (state.view === 'orders') setTimeout(() => { if (state.view === 'orders') reload(); }, 1600);
+}
+
+// Layar QR memantau status pesanan sampai dibayar atau dibatalkan
+async function pollQris() {
+  if (qrisBusy || document.hidden) return;
+  const ids = [...new Set($$('[data-qris]').map(box => box.dataset.qris))];
+  if (!ids.length) return;
+
+  qrisBusy = true;
+  try {
+    for (const id of ids) {
+      try {
+        const { status } = await api(`/orders/${id}/status`);
+        if (status !== 'pending') showQrisResult(id, status);
+      } catch (err) {
+        if (err.status === 401) return;
+      }
+    }
+  } finally {
+    qrisBusy = false;
+  }
+}
+
+async function simulateQrisScan(el) {
+  el.disabled = true;
+  try {
+    const { order } = await api(`/orders/${el.dataset.id}/simulate-pay`, { method: 'POST', body: {} });
+    showQrisResult(order.id, order.status);
+  } catch (err) {
+    el.disabled = false;
+    toast(err.message, 'err');
+  }
+}
+
+async function copyToClipboard(el) {
+  try {
+    await navigator.clipboard.writeText(el.dataset.text);
+    toast(el.dataset.label + ' disalin');
+  } catch {
+    toast('Tidak bisa menyalin, salin manual', 'err');
+  }
+}
+
 async function confirmAndDelete({ title, message, okLabel, path, successMessage }) {
   const confirmed = await confirmDialog(title, message, okLabel, true);
   if (!confirmed) return;
@@ -545,36 +667,38 @@ function deleteProduct(el) {
   });
 }
 
-function setProductGroup(el) {
-  state.productFilter.group = el.dataset.group;
-  applyProductFilter();
-}
-
-// Kotak dan batang di Ringkasan membuka halaman yang relevan, dengan filter yang sudah terpasang
-async function dashboardGo(el) {
-  const { view, status, group } = el.dataset;
-  if (status !== undefined) state.orderFilter = status;
-  await show(view);
-  if (group) { state.productFilter.group = group; applyProductFilter(); }
+function resetProductQuery() {
+  clearTimeout(searchDebounce);
+  state.query = '';
 }
 
 function clearProductSearch() {
-  clearTimeout(searchDebounce);
-  state.query = '';
+  resetProductQuery();
   applyProductFilter();
   $('[data-input="prod-search"]')?.focus();
 }
 
 function resetProductFilter() {
-  clearTimeout(searchDebounce);
-  state.query = '';
-  state.productFilter = { group: '', category: '' };
+  resetProductQuery();
+  state.productFilter = emptyProductFilter();
+  applyProductFilter();
+}
+
+function setProductGroup(el) {
+  state.productFilter.group = el.dataset.group;
   applyProductFilter();
 }
 
 function setProductCategory(select) {
   state.productFilter.category = select.value;
   applyProductFilter();
+}
+
+async function dashboardGo(el) {
+  const { view, status, group } = el.dataset;
+  if (status !== undefined) state.orderFilter = status;
+  await show(view);
+  if (group) { state.productFilter.group = group; applyProductFilter(); }
 }
 
 function deleteUser(el) {
@@ -588,7 +712,28 @@ function deleteUser(el) {
   });
 }
 
-// --- Hapus log (satu atau banyak) ---
+function confirmMakeAdmin(id) {
+  const target = state.users.find(user => user.id === id);
+  const who = target ? '@' + target.username : 'Pengguna ini';
+  return confirmDialog('Jadikan Admin?', `${who} akan bisa mengelola produk, pesanan, dan melihat pendapatan toko.`, 'Jadikan Admin');
+}
+
+async function changeUserSetting(el) {
+  const { id, change } = el.dataset;
+  try {
+    if (change === 'user-role') {
+      if (el.value === 'admin' && !(await confirmMakeAdmin(id))) { await reload(); return; }
+      await api('/users/' + id, { method: 'PATCH', body: { role: el.value } });
+    } else if (change === 'user-active') {
+      await api('/users/' + id, { method: 'PATCH', body: { active: el.checked } });
+    }
+    toast('Perubahan disimpan', 'ok');
+    await reload();
+  } catch (err) {
+    toast(err.message, 'err');
+    await reload();
+  }
+}
 
 function pickLog(el) {
   if (el.checked) state.selectedLogs.add(el.dataset.id);
@@ -598,40 +743,8 @@ function pickLog(el) {
 
 function pickAllLogs(el) {
   state.selectedLogs.clear();
-  if (el.checked) visibleLogIds().forEach(id => state.selectedLogs.add(id));   // hanya log yang tampil (bisa terfilter)
+  if (el.checked) visibleLogIds().forEach(id => state.selectedLogs.add(id));
   syncLogSelection();
-}
-
-// --- Filter Log (toolbar di atas tabel) ---
-
-let logSearchTimer = 0;
-function typeLogSearch(input) {
-  state.logFilter.q = input.value;
-  const clear = $('.log-q-clear');
-  if (clear) clear.hidden = !input.value;   // tombol hapus langsung muncul; tabel menyusul setelah jeda singkat
-  clearTimeout(logSearchTimer);
-  logSearchTimer = setTimeout(applyLogFilter, 150);
-}
-
-function setLogGroup(el) {
-  state.logFilter.group = el.dataset.group;
-  applyLogFilter();
-}
-
-function setLogAction(el) {
-  state.logFilter.action = el.value;
-  applyLogFilter();
-}
-
-function clearLogSearch() {
-  state.logFilter.q = '';
-  applyLogFilter();
-  $('[data-log-q]')?.focus();
-}
-
-function resetLogFilter() {
-  state.logFilter = { q: '', group: '', action: '' };
-  applyLogFilter();
 }
 
 function clearLogSelection() {
@@ -660,25 +773,107 @@ async function deleteLogs(ids) {
   }
 }
 
+function typeLogSearch(input) {
+  state.logFilter.q = input.value;
+  const clear = $('.log-q-clear');
+  if (clear) clear.hidden = !input.value;
+  clearTimeout(logSearchTimer);
+  logSearchTimer = setTimeout(applyLogFilter, LOG_SEARCH_DEBOUNCE_MS);
+}
+
+function setLogGroup(el) {
+  state.logFilter.group = el.dataset.group;
+  applyLogFilter();
+}
+
+function setLogAction(el) {
+  state.logFilter.action = el.value;
+  applyLogFilter();
+}
+
+function clearLogSearch() {
+  state.logFilter.q = '';
+  applyLogFilter();
+  $('[data-log-q]')?.focus();
+}
+
+function resetLogFilter() {
+  state.logFilter = emptyLogFilter();
+  applyLogFilter();
+}
+
+
+const profileMenuOpen = () => Boolean($('#app .pm-pop:not([hidden])'));
+
+function setProfileMenu(open, { focus = false } = {}) {
+  const root = $('#app .pm');
+  if (!root) return;
+  const button = $('.pm-btn', root);
+  $('.pm-pop', root).hidden = !open;
+  root.classList.toggle('open', open);
+  $('#app .top')?.classList.toggle('menu-open', open);
+  button.setAttribute('aria-expanded', String(open));
+  if (open) { syncInstall(); $('[role=menuitem]:not([hidden])', root)?.focus(); }
+  else if (focus) button.focus();
+}
+
+const openFromMenu = openFn => { setProfileMenu(false, { focus: true }); openFn(); };
+const openProfile = () => openFromMenu(profileModal);
+const openPassword = () => openFromMenu(passwordModal);
+
+async function setMainAddress(el) {
+  const item = findAddress(el.dataset.id);
+  if (!item) return;
+  try {
+    const result = await api('/auth/addresses/' + item.id, {
+      method: 'PUT',
+      body: { label: item.label, recipient: item.recipient, phone: item.phone, address: item.address, main: true }
+    });
+    state.user.addresses = result.addresses;
+    addressesModal();
+    toast('Alamat utama diganti', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function deleteAddress(el) {
+  const item = findAddress(el.dataset.id);
+  if (!item) return;
+  const ok = await confirmDialog(`Hapus alamat ${item.label}?`, 'Alamat ini dihapus dari akun Anda. Pesanan yang sudah dibuat tidak berubah.', 'Hapus', true);
+  if (!ok) { addressesModal(); return; }
+  try {
+    const result = await api('/auth/addresses/' + item.id, { method: 'DELETE', body: {} });
+    state.user.addresses = result.addresses;
+    toast('Alamat dihapus', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+  addressesModal();
+}
+
 function togglePasswordVisibility(checkbox) {
   $$('input[name=password],input[name=confirm],input[data-pw]', checkbox.closest('form')).forEach(input => {
     input.type = checkbox.checked ? 'text' : 'password';
   });
 }
 
-// --- Lupa password ---
+function updatePasswordChecks(form) {
+  const password = form.elements.new_password.value;
+  const rules = {
+    len: password.length >= 8,
+    letter: /[A-Za-z]/.test(password),
+    digit: /\d/.test(password),
+    match: password !== '' && password === form.elements.confirm.value
+  };
+  $$('[data-check]', form).forEach(item => item.toggleAttribute('data-ok', rules[item.dataset.check]));
+}
 
-// Bila pengguna sudah mengetik email di form masuk, bawa ke form Lupa password
 function loginEmailHint() {
   const typed = ($('#f-id')?.value || '').trim();
   return typed.includes('@') ? typed : '';
 }
 
-let resendTimer = null;
-let otpTimer = null;
-
-// Tombol kirim ulang aktif lagi setelah hitung mundur selesai (dihitung dari jam, bukan dari jumlah detak, agar tidak meleset di tab latar).
-// Garis tipis di bawahnya ikut menyusut sebagai penanda sisa waktu.
 function startResendCountdown(button, seconds) {
   clearInterval(resendTimer);
   if (!button) return;
@@ -728,7 +923,6 @@ async function resendResetCode(button) {
   }
 }
 
-// Kotak kode: gambar ulang saat isi berubah. Begitu lengkap, kotak "bergelombang" sebentar lalu langkah berikutnya terbuka sendiri.
 function onOtpInput(wrap) {
   renderOtp(wrap);
   const input = $('.otp-input', wrap);
@@ -752,13 +946,12 @@ function onOtpFocus(e) {
   if (wrap) renderOtp(wrap);
 }
 
-// Kursor selalu di ujung: mengetuk kotak tidak boleh menyisipkan digit di tengah
 function onOtpPointer(e) {
   const wrap = e.target.closest?.('[data-otp]');
   const input = wrap && $('.otp-input', wrap);
   if (!input) return;
   requestAnimationFrame(() => {
-    try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* abaikan */ }
+    try { input.setSelectionRange(input.value.length, input.value.length); } catch { }
   });
 }
 
@@ -774,7 +967,6 @@ function finishReset() {
   if (field) field.focus();
 }
 
-// Kode ditolak server: kembali ke langkah kode dengan kotak kosong dan pesan di bawahnya. Isian password tidak hilang.
 async function backToCodeStep(err) {
   const form = $('#modal-root form[data-form="code"]');
   if (!form) return;
@@ -784,58 +976,9 @@ async function backToCodeStep(err) {
   renderOtp(input.closest('[data-otp]'));
   clearErrors(form);
   await showResetStep(2);
-  if (form.isConnected) {
-    showErrors(form, createError(err.message, {
-      fields: { code: 'Kode salah atau sudah kedaluwarsa. Periksa lagi, atau kirim ulang kode.' }
-    }));
-  }
+  if (form.isConnected) showErrors(form, createError(err.message, { fields: { code: CODE_REJECTED } }));
 }
 
-// Daftar syarat password ikut berubah saat mengetik (hanya petunjuk; server tetap yang memutuskan)
-function updatePasswordChecks(form) {
-  const password = form.elements.new_password.value;
-  const rules = {
-    len: password.length >= 8,
-    letter: /[A-Za-z]/.test(password),
-    digit: /\d/.test(password),
-    match: password !== '' && password === form.elements.confirm.value
-  };
-  $$('[data-check]', form).forEach(item => item.toggleAttribute('data-ok', rules[item.dataset.check]));
-}
-
-// data-act -> handler(elemen, event)
-// --- Alamat saya ---
-
-async function setMainAddress(el) {
-  const item = (state.user.addresses || []).find(a => a.id === el.dataset.id);
-  if (!item) return;
-  try {
-    const result = await api('/auth/addresses/' + item.id, {
-      method: 'PUT',
-      body: { label: item.label, recipient: item.recipient, phone: item.phone, address: item.address, main: true }
-    });
-    state.user.addresses = result.addresses;
-    addressesModal();
-    toast('Alamat utama diganti', 'ok');
-  } catch (err) {
-    toast(err.message, 'err');
-  }
-}
-
-async function deleteAddress(el) {
-  const item = (state.user.addresses || []).find(a => a.id === el.dataset.id);
-  if (!item) return;
-  const ok = await confirmDialog(`Hapus alamat ${item.label}?`, 'Alamat ini dihapus dari akun Anda. Pesanan yang sudah dibuat tidak berubah.', 'Hapus', true);
-  if (!ok) { addressesModal(); return; }   // confirmDialog menutup daftar alamat; tampilkan lagi bila batal
-  try {
-    const result = await api('/auth/addresses/' + item.id, { method: 'DELETE', body: {} });
-    state.user.addresses = result.addresses;
-    toast('Alamat dihapus', 'ok');
-  } catch (err) {
-    toast(err.message, 'err');
-  }
-  addressesModal();
-}
 
 const actions = {
   'auth-tab': el => renderAuth(el.dataset.tab),
@@ -843,10 +986,12 @@ const actions = {
   'dash-go': dashboardGo,
   reload,
   logout,
+  'refresh-page': () => location.reload(),
+
   'close-modal': closeModal,
-  // modal bertanda data-keep (isian panjang, mis. pemulihan password) tidak tertutup oleh ketukan di luar
   overlay: (el, e) => { if (e.target === el && !el.querySelector('[data-keep]')) closeModal(); },
   'ask-ok': confirmAccepted,
+
   cat: filterByCategory,
   'open-filter': filterModal,
   'apply-filter': applyFilters,
@@ -861,6 +1006,7 @@ const actions = {
   'rail-next': () => scrollRail(1),
   detail: openProductDetail,
   'detail-add': addFromProductDetail,
+
   'add-cart': addOneToCart,
   'cart-inc': addOneToCart,
   'cart-dec': el => setCartQty(el.dataset.id, cartQty(el.dataset.id) - 1),
@@ -870,8 +1016,10 @@ const actions = {
   checkout: openCheckout,
   ofilter: filterOrders,
   copy: copyToClipboard,
+  'qris-sim': simulateQrisScan,
   reorder,
   'order-status': changeOrderStatus,
+
   'product-new': () => productModal(null),
   'product-edit': el => productModal(state.productMap[el.dataset.id]),
   'product-del': deleteProduct,
@@ -880,13 +1028,17 @@ const actions = {
   'prod-reset': resetProductFilter,
   'photo-pick': el => choosePhoto(el.closest('form')),
   'photo-clear': el => clearPhoto(el.closest('form')),
+
   'user-new': userModal,
+  'user-del': deleteUser,
+
   'profile-menu': () => setProfileMenu(!profileMenuOpen()),
-  'profile-open': () => openProfile(),
+  'profile-open': openProfile,
   'profile-close': () => setProfileMenu(false, { focus: true }),
+  'change-password': openPassword,
   'address-open': () => addressesModal(),
   'address-new': () => addressFormModal(),
-  'address-edit': el => addressFormModal((state.user.addresses || []).find(item => item.id === el.dataset.id) || null),
+  'address-edit': el => addressFormModal(findAddress(el.dataset.id) || null),
   'address-main': setMainAddress,
   'address-del': deleteAddress,
   'about-open': () => aboutModal(),
@@ -895,12 +1047,13 @@ const actions = {
   'set-theme': setTheme,
   'set-toggle': toggleSetting,
   'install-app': installApp,
-  'change-password': openPassword,
+
+  'toggle-pw': togglePasswordVisibility,
   'forgot-open': () => forgotModal(loginEmailHint()),
   'forgot-resend': resendResetCode,
   'wiz-back': wizardBack,
   'wiz-finish': finishReset,
-  'user-del': deleteUser,
+
   'log-pick': pickLog,
   'log-pick-all': pickAllLogs,
   'log-clear': clearLogSelection,
@@ -908,18 +1061,14 @@ const actions = {
   'log-q-clear': clearLogSearch,
   'log-reset': resetLogFilter,
   'log-del': el => deleteLogs([el.dataset.id]),
-  'log-del-selected': () => deleteLogs([...state.selectedLogs]),
-  'toggle-pw': togglePasswordVisibility,
-  'refresh-page': () => location.reload()
+  'log-del-selected': () => deleteLogs([...state.selectedLogs])
 };
 
-// === Form ===
 
 function clearErrors(form) {
   $$('.invalid', form).forEach(input => { input.classList.remove('invalid'); input.removeAttribute('aria-invalid'); });
   $$('.field-err', form).forEach(msg => msg.remove());
-  const alert = $('.form-alert', form);
-  if (alert) alert.classList.remove('show');
+  $('.form-alert', form)?.classList.remove('show');
 }
 
 function showErrors(form, err) {
@@ -928,7 +1077,7 @@ function showErrors(form, err) {
     const input = form.querySelector(`[name="${CSS.escape(name)}"]`);
     if (!input) return;
     input.classList.remove('invalid');
-    void input.offsetWidth;   // paksa reflow agar animasi getar mulai ulang di kegagalan berikutnya
+    void input.offsetWidth;
     input.classList.add('invalid');
     input.setAttribute('aria-invalid', 'true');
 
@@ -940,21 +1089,16 @@ function showErrors(form, err) {
     invalid.push(input);
   });
 
-  // Pesan per kolom sudah cukup; banner hanya untuk error yang tidak terkait kolom tertentu
   const alert = $('.form-alert', form);
   if (alert) {
     alert.textContent = invalid.length ? '' : err.message;
     alert.classList.toggle('show', !invalid.length);
-    // tombol kirim ada di bawah, pesan di atas: bawa pesan ke layar supaya tidak terlewat
     if (!invalid.length) alert.scrollIntoView({ block: 'nearest' });
   }
 
-  // Fokus ke kolom salah pertama supaya pengguna keyboard dan pembaca layar tidak kehilangan posisi
-  const first = invalid.find(input => input.type !== 'hidden');
-  if (first) first.focus();
+  invalid.find(input => input.type !== 'hidden')?.focus();
 }
 
-// Error sebuah kolom hilang begitu pengguna memperbaikinya; banner ikut hilang bila tak ada kolom salah lagi
 function clearFieldError(input) {
   input.classList.remove('invalid');
   input.removeAttribute('aria-invalid');
@@ -963,40 +1107,19 @@ function clearFieldError(input) {
   if (form && !$('.invalid', form)) $('.form-alert', form)?.classList.remove('show');
 }
 
-// bentuknya sama dengan error dari server
-const validationError = fields => createError('Periksa kembali isian Anda', { fields });
-
-// Aturan yang sama dengan server (min. 8 karakter, ada huruf dan angka), supaya salahnya ketahuan sebelum dikirim.
-// Server tetap memeriksa ulang dan tidak memakai kode reset bila password ditolak.
 const passwordProblem = password =>
   password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password)
     ? ''
     : 'Password minimal 8 karakter dan mengandung huruf serta angka';
 
-// Satu kunci per isi keranjang. Bila respons hilang di jalan lalu pelanggan mengulang, server mengembalikan
-// pesanan yang sudah dibuat, bukan membuat pesanan kedua. Kunci kedaluwarsa agar keranjang yang sama
-// berjam-jam kemudian tidak "menghidupkan" pesanan lama.
-const CHECKOUT_KEY_TTL_MS = 10 * 60 * 1000;
+const mismatchError = () => validationError({ confirm: 'Konfirmasi password tidak sama' });
 
-function checkoutKey(items) {
-  const signature = JSON.stringify(items);
-  const current = state.checkout;
-  const fresh = current && current.signature === signature && Date.now() - current.at < CHECKOUT_KEY_TTL_MS;
-  if (!fresh) state.checkout = { signature, key: newRequestKey(), at: Date.now() };
-  return state.checkout.key;
+function checkNewPassword(data) {
+  const weak = passwordProblem(data.new_password || '');
+  if (weak) throw validationError({ new_password: weak });
+  if (data.new_password !== data.confirm) throw mismatchError();
 }
 
-// Stok atau harga berubah sejak katalog dimuat: tutup form, muat ulang katalog, dan tampilkan keranjang yang sudah disesuaikan
-async function refreshAfterStockConflict(err) {
-  closeModal();
-  toast(err.message, 'err');
-  if (state.view === 'shop') await reload();   // sekaligus menggambar ulang kartu produk
-  else await loadProducts();
-  drawCart();
-  openCart();
-}
-
-// handler submit per data-form; lempar error untuk ditampilkan
 const formHandlers = {
   async login(form, data) {
     const result = await api('/auth/login', { method: 'POST', body: { identifier: data.identifier, password: data.password } });
@@ -1004,9 +1127,7 @@ const formHandlers = {
   },
 
   async register(form, data) {
-    if (data.password !== data.confirm) {
-      throw validationError({ confirm: 'Konfirmasi password tidak sama' });
-    }
+    if (data.password !== data.confirm) throw mismatchError();
     const result = await api('/auth/register', {
       method: 'POST',
       body: { name: data.name, username: data.username, email: data.email, password: data.password }
@@ -1023,25 +1144,20 @@ const formHandlers = {
   },
 
   async password(form, data) {
-    const weak = passwordProblem(data.new_password || '');
-    if (weak) throw validationError({ new_password: weak });
-    if (data.new_password !== data.confirm) {
-      throw validationError({ confirm: 'Konfirmasi password tidak sama' });
-    }
+    checkNewPassword(data);
     await api('/auth/password', {
       method: 'PATCH',
       body: { current_password: data.current_password, new_password: data.new_password }
     });
     closeModal();
     toast('Password diganti. Perangkat lain perlu masuk lagi.', 'ok');
-    if (state.view === 'logs') await reload();   // log "Password Diubah" langsung tampil
+    if (state.view === 'logs') await reload();
   },
 
   async profile(form, data) {
-    const name = String(data.name || '').trim();
+    const name = cleanText(data.name);
     if (name.length < 2) throw validationError({ name: 'Nama lengkap minimal 2 karakter' });
 
-    // Kolom foto (image) hanya ikut terkirim bila foto diganti (isinya foto baru) atau dihapus (kosong)
     const body = { name };
     if ('image' in data) body.image = data.image;
 
@@ -1050,17 +1166,17 @@ const formHandlers = {
     refreshProfileMenu();
     closeModal();
     toast('Profil disimpan', 'ok');
-    if (state.view === 'users' || state.view === 'logs') await reload();   // foto/nama di daftar Pengguna dan log baru ikut tampil
+    if (state.view === 'users' || state.view === 'logs') await reload();
   },
 
   async address(form, data) {
     const id = form.dataset.id;
-    const recipient = String(data.recipient || '').trim();
-    const phone = String(data.phone || '').replace(/[\s.-]/g, '');
-    const address = String(data.address || '').trim();
+    const recipient = cleanText(data.recipient);
+    const phone = normalizePhone(data.phone);
+    const address = cleanText(data.address);
     const errors = {};
-    if (recipient.length < 2) errors.recipient = 'Nama penerima minimal 2 karakter';
-    if (!/^\+?\d{8,15}$/.test(phone)) errors.phone = 'Isi nomor HP yang benar, contoh 081234567890';
+    if (recipient.length < 2) errors.recipient = RECIPIENT_ERROR;
+    if (!PHONE_RE.test(phone)) errors.phone = PHONE_ERROR;
     if (address.length < 5) errors.address = 'Alamat minimal 5 karakter';
     if (Object.keys(errors).length) throw validationError(errors);
 
@@ -1074,14 +1190,12 @@ const formHandlers = {
   },
 
   async forgot(form, data) {
-    const email = String(data.email || '').trim().toLowerCase();
+    const email = cleanText(data.email).toLowerCase();
     if (!/^\S+@\S+\.\S+$/.test(email)) throw validationError({ email: 'Format email tidak valid' });
 
     const flow = state.reset;
-    // Email sama dan kode masih dalam masa jeda: pakai kode yang sudah dikirim, tidak perlu meminta lagi
     const alreadySent = flow.sentTo === email && Date.now() < flow.endAt;
     if (!alreadySent) {
-      // jawaban server sama untuk email terdaftar maupun tidak
       const result = await api('/auth/forgot', { method: 'POST', body: { email } });
       const retryAfter = Number(result.retry_after) || 60;
       flow.sentTo = email;
@@ -1097,8 +1211,6 @@ const formHandlers = {
     showResetStep(2);
   },
 
-  // Kode diperiksa server dulu (tanpa dipakai) sebelum langkah password terbuka, jadi kode asal tidak bisa lolos.
-  // Server tetap memeriksa lagi dan memakai kode itu saat password baru dikirim.
   async code(form, data) {
     const code = String(data.code || '').replace(/\D/g, '');
     if (!/^\d{6}$/.test(code)) throw validationError({ code: 'Kode terdiri dari 6 angka' });
@@ -1107,32 +1219,26 @@ const formHandlers = {
     try {
       await api('/auth/reset/check', { method: 'POST', body: { email: flow.sentTo || flow.email, code } });
     } catch (err) {
-      if (err.fields && err.fields.code) {   // kode salah atau kedaluwarsa: kosongkan kotak supaya bisa diketik ulang
+      if (err.fields && err.fields.code) {
         const input = form.elements.code;
         input.value = '';
         renderOtp(input.closest('[data-otp]'));
-        throw createError(err.message, {
-          fields: { code: 'Kode salah atau sudah kedaluwarsa. Periksa lagi, atau kirim ulang kode.' }
-        });
+        throw createError(err.message, { fields: { code: CODE_REJECTED } });
       }
-      throw err;   // mis. terkunci sementara (429) atau jaringan putus: tampil sebagai banner di langkah ini
+      throw err;
     }
     flow.code = code;
     showResetStep(3);
   },
 
   async reset(form, data) {
-    const weak = passwordProblem(data.new_password || '');
-    if (weak) throw validationError({ new_password: weak });
-    if (data.new_password !== data.confirm) {
-      throw validationError({ confirm: 'Konfirmasi password tidak sama' });
-    }
+    checkNewPassword(data);
     const flow = state.reset;
     const email = flow.sentTo || flow.email;
     try {
       await api('/auth/reset', { method: 'POST', body: { email, code: flow.code, new_password: data.new_password } });
     } catch (err) {
-      if (err.fields && err.fields.code) {   // kode salah atau kedaluwarsa
+      if (err.fields && err.fields.code) {
         await backToCodeStep(err);
         return;
       }
@@ -1144,7 +1250,6 @@ const formHandlers = {
     form.elements.confirm.value = '';
     updatePasswordChecks(form);
 
-    // email sudah terisi di form masuk; tinggal ketik password baru
     const identifier = $('#f-id');
     if (identifier) identifier.value = email;
     showResetStep(4);
@@ -1158,41 +1263,39 @@ const formHandlers = {
   },
 
   async checkout(form, data) {
-    const phone = String(data.phone || '').replace(/[\s.-]/g, '');
-    if (!/^\+?\d{8,15}$/.test(phone)) {
-      throw validationError({ phone: 'Isi nomor HP yang benar, contoh 081234567890' });
-    }
+    const phone = normalizePhone(data.phone);
+    if (!PHONE_RE.test(phone)) throw validationError({ phone: PHONE_ERROR });
 
-    const recipient = String(data.recipient || '').trim();
-    if (recipient.length < 2) throw validationError({ recipient: 'Nama penerima minimal 2 karakter' });
-    const address = String(data.address || '').trim();
+    const recipient = cleanText(data.recipient);
+    if (recipient.length < 2) throw validationError({ recipient: RECIPIENT_ERROR });
+    const pickup = data.shipping_method === 'pickup';
+    const address = pickup ? '' : cleanText(data.address);
+    if (!pickup && address.length < 5) throw validationError({ address: 'Alamat minimal 5 karakter' });
 
-    // harga ikut dikirim: server menolak (409) bila harga di katalog sudah berubah dari yang dilihat pelanggan
+    // Harga ikut dikirim: server menolak (409) bila harga katalog sudah berubah
     const items = cartLines().map(line => ({ product_id: line.product.id, qty: line.qty, price: line.product.price }));
     let result;
     try {
       result = await api('/orders', {
         method: 'POST',
-        body: { items, phone, address, recipient, note: data.note },
-        headers: { 'Idempotency-Key': checkoutKey(items) }
+        body: { items, phone, address, recipient, note: data.note, shipping_method: data.shipping_method, payment_method: data.payment_method },
+        headers: { 'Idempotency-Key': checkoutKey(items, data.shipping_method, data.payment_method) }
       });
     } catch (err) {
-      // 409: stok tidak cukup atau harga berubah, 404: produk sudah dihapus. Katalog di layar sudah basi.
       if (err.status === 409 || err.status === 404) return refreshAfterStockConflict(err);
       throw err;
     }
 
     state.checkout = null;
     state.cart = {};
-    // Alamat baru disimpan ke akun bila dicentang. Pesanan sudah jadi, jadi kegagalan di sini tidak boleh membatalkannya.
-    if (data.save_address === '1' && (state.user.addresses || []).length < ADDRESS_LIMIT) {
+    if (!pickup && data.save_address === '1' && myAddresses().length < ADDRESS_LIMIT) {
       try {
         const saved = await api('/auth/addresses', {
           method: 'POST',
-          body: { label: 'Rumah', recipient, phone, address, main: !(state.user.addresses || []).length }
+          body: { label: 'Rumah', recipient, phone, address, main: !myAddresses().length }
         });
         state.user.addresses = saved.addresses;
-      } catch { /* pesanan tetap berhasil; alamat bisa ditambah lewat menu akun */ }
+      } catch { }
     }
     closeModal();
     await show('orders');
@@ -1218,7 +1321,6 @@ async function onSubmit(e) {
   try {
     await handler(form, Object.fromEntries(new FormData(form)));
   } catch (err) {
-    // Form bisa sudah hilang dari DOM (mis. setelah sesi berakhir); pakai toast sebagai gantinya
     if (form.isConnected) showErrors(form, err);
     else toast(err.message, 'err');
   } finally {
@@ -1229,147 +1331,91 @@ async function onSubmit(e) {
   }
 }
 
-// === Event listener ===
 
 function onClick(e) {
-  if (profileMenuOpen() && !e.target.closest('.pm')) setProfileMenu(false);   // ketuk di luar menu menutupnya
+  if (profileMenuOpen() && !e.target.closest('.pm')) setProfileMenu(false);
   const el = e.target.closest('[data-act]');
   if (!el) return;
-  // memilih sesuatu di menu akun menutupnya; fokus kembali ke tombol akun supaya modal berikutnya kembali ke sana
   if (el.closest('.pm-pop') && profileMenuOpen()) setProfileMenu(false, { focus: true });
-  const handler = actions[el.dataset.act];
-  if (handler) handler(el, e);
+  actions[el.dataset.act]?.(el, e);
 }
 
 async function onChange(e) {
-  if (e.target.matches('[data-log-action]')) { setLogAction(e.target); return; }
-  if (e.target.matches('[data-prod-category]')) { setProductCategory(e.target); return; }
-  if (e.target.matches('[data-photo-input]')) { await handlePhotoInput(e.target); return; }
-  if (e.target.matches('[data-addr-pick]')) { pickCheckoutAddress(e.target); return; }
+  const target = e.target;
+  if (target.matches('[data-log-action]')) { setLogAction(target); return; }
+  if (target.matches('[data-prod-category]')) { setProductCategory(target); return; }
+  if (target.matches('[data-photo-input]')) { await handlePhotoInput(target); return; }
+  if (target.matches('[data-addr-pick]')) { pickCheckoutAddress(target); return; }
+  if (target.matches('[data-co-pick]')) { updateCheckout(target.closest('form')); return; }
 
-  if (e.target.matches('[data-sort]')) {
-    state.sort = e.target.value;
+  if (target.matches('[data-sort]')) {
+    state.sort = target.value;
     renderList();
     keepResultsInView();
     return;
   }
 
-  const el = e.target.closest('[data-change]');
-  if (!el) return;
-  const id = el.dataset.id;
-
-  try {
-    if (el.dataset.change === 'user-role') {
-      // menjadikan seseorang Admin memberi akses penuh ke produk dan pesanan, jadi harus dikonfirmasi
-      if (el.value === 'admin') {
-        const target = state.users.find(user => user.id === id);
-        const ok = await confirmDialog('Jadikan Admin?', `${target ? '@' + target.username : 'Pengguna ini'} akan bisa mengelola produk, pesanan, dan melihat pendapatan toko.`, 'Jadikan Admin');
-        if (!ok) { await reload(); return; }   // batal: kembalikan pilihan ke role semula
-      }
-      await api('/users/' + id, { method: 'PATCH', body: { role: el.value } });
-    }
-    if (el.dataset.change === 'user-active') await api('/users/' + id, { method: 'PATCH', body: { active: el.checked } });
-    toast('Perubahan disimpan', 'ok');
-    await reload();
-  } catch (err) {
-    toast(err.message, 'err');
-    await reload();
-  }
+  const el = target.closest('[data-change]');
+  if (el) await changeUserSetting(el);
 }
 
-// Pencarian produk di halaman Belanja memakai indeks teks MongoDB lewat GET /api/products?q=...
-// Hasil filter lokal tampil seketika; hasil server menggantikannya begitu tiba. Bila server gagal atau
-// kata terlalu pendek, filter lokal tetap dipakai, jadi pencarian tidak pernah "mati".
-const MIN_SERVER_SEARCH = 2;
-let searchSeq = 0;
-
-async function searchOnServer(raw) {
-  const query = raw.trim();
-  const seq = ++searchSeq;   // respons yang datang terlambat (kata sudah berubah) diabaikan
-  if (query.length < MIN_SERVER_SEARCH) return;
-
-  try {
-    const result = await api('/products?q=' + encodeURIComponent(query));
-    if (seq !== searchSeq || state.view !== 'shop' || state.query.trim() !== query) return;
-    state.searchIds = result.products.map(product => product.id);
-    renderList();
-  } catch {
-    if (seq === searchSeq) state.searchIds = null;
-  }
+function syncDigitsInput(target) {
+  const digits = target.closest('[data-digits]');
+  if (!digits) return;
+  const clean = digits.value.replace(/\D/g, '').slice(0, 6);
+  if (clean !== digits.value) digits.value = clean;
+  const otp = digits.closest('[data-otp]');
+  if (otp) onOtpInput(otp);
 }
 
-let searchDebounce;
-function onInput(e) {
-  if (e.target.matches('[data-log-q]')) { typeLogSearch(e.target); return; }
-  if (e.target.classList?.contains('invalid')) clearFieldError(e.target);
+function syncPasswordChecks(target) {
+  const form = target.closest('form[data-pwcheck]');
+  if (!form) return;
+  updatePasswordChecks(form);
+  const { new_password, confirm } = form.elements;
+  if (confirm.classList.contains('invalid') && confirm.value === new_password.value) clearFieldError(confirm);
+}
 
-  // kode reset hanya angka (tempel "123 456" pun jadi 123456)
-  const digits = e.target.closest('[data-digits]');
-  if (digits) {
-    const clean = digits.value.replace(/\D/g, '').slice(0, 6);
-    if (clean !== digits.value) digits.value = clean;
-    const otp = digits.closest('[data-otp]');
-    if (otp) onOtpInput(otp);
-  }
-
-  const pwForm = e.target.closest('form[data-pwcheck]');
-  if (pwForm) {
-    updatePasswordChecks(pwForm);
-    const { new_password, confirm } = pwForm.elements;
-    if (confirm.classList.contains('invalid') && confirm.value === new_password.value) clearFieldError(confirm);
-  }
-
-  const el = e.target.closest('[data-input]');
+function syncSearchInput(target) {
+  const el = target.closest('[data-input]');
   if (!el) return;
 
+  const isShop = el.dataset.input === 'shop-search';
   state.query = el.value;
-  if (el.dataset.input === 'shop-search') {
+  if (isShop) {
     const clearButton = $('.search .clear');
     if (clearButton) clearButton.hidden = !el.value;
   }
   clearTimeout(searchDebounce);
-  searchDebounce = setTimeout(() => {
-    if (el.dataset.input === 'shop-search') {
-      state.searchIds = null;      // kata berubah: tampilkan filter lokal dulu, hasil server menyusul
-      renderList();
-      keepResultsInView();
-      searchOnServer(state.query);
-    } else {
-      applyProductFilter();
-    }
-  }, 200);
+  searchDebounce = setTimeout(isShop ? runShopSearch : applyProductFilter, SEARCH_DEBOUNCE_MS);
 }
 
-// Escape menutup modal/laci; Tab dikurung di dalam modal
-function onModalKeydown(e) {
-  const modalOpen = $('#modal-root').firstChild;
+function onInput(e) {
+  const target = e.target;
+  if (target.matches('[data-log-q]')) { typeLogSearch(target); return; }
+  if (target.classList?.contains('invalid')) clearFieldError(target);
+  syncDigitsInput(target);
+  syncPasswordChecks(target);
+  syncSearchInput(target);
+}
 
-  if (e.key === 'Escape') {
-    if (profileMenuOpen()) { setProfileMenu(false, { focus: true }); return; }
-    const active = document.activeElement;
-    if (modalOpen) closeModal();
-    else if (active?.matches?.('[data-input=shop-search]') && active.value) clearSearch();
-    else closeCart();
-    return;
-  }
+function handleEscape(modalOpen) {
+  if (profileMenuOpen()) { setProfileMenu(false, { focus: true }); return; }
+  const active = document.activeElement;
+  if (modalOpen) closeModal();
+  else if (active?.matches?.('[data-input=shop-search]') && active.value) clearSearch();
+  else closeCart();
+}
 
-  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && profileMenuOpen()) {
-    const items = $$('#app .pm-pop [role=menuitem]').filter(item => !item.hidden);
-    const at = items.indexOf(document.activeElement);
-    const next = e.key === 'ArrowDown' ? (at + 1) % items.length : (at <= 0 ? items.length - 1 : at - 1);
-    e.preventDefault();
-    items[next].focus();
-    return;
-  }
+function moveMenuFocus(e) {
+  const items = $$('#app .pm-pop [role=menuitem]').filter(item => !item.hidden);
+  const at = items.indexOf(document.activeElement);
+  const next = e.key === 'ArrowDown' ? (at + 1) % items.length : (at <= 0 ? items.length - 1 : at - 1);
+  e.preventDefault();
+  items[next].focus();
+}
 
-  if (e.key === 'Enter' && e.target.matches?.('#f-min, #f-max')) {
-    e.preventDefault();
-    applyFilters();
-    return;
-  }
-
-  if (e.key !== 'Tab' || !modalOpen) return;
-
+function trapFocus(e) {
   const focusable = $$('#modal-root button:not([disabled]), #modal-root input:not([disabled]), #modal-root select, #modal-root textarea')
     .filter(el => el.offsetParent !== null);
   if (!focusable.length) return;
@@ -1390,6 +1436,15 @@ function onModalKeydown(e) {
   }
 }
 
+function onModalKeydown(e) {
+  const modalOpen = Boolean($('#modal-root').firstChild);
+
+  if (e.key === 'Escape') { handleEscape(modalOpen); return; }
+  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && profileMenuOpen()) { moveMenuFocus(e); return; }
+  if (e.key === 'Enter' && e.target.matches?.('#f-min, #f-max')) { e.preventDefault(); applyFilters(); return; }
+  if (e.key === 'Tab' && modalOpen) trapFocus(e);
+}
+
 function onSearchShortcut(e) {
   if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
   if ($('#modal-root').firstChild) return;
@@ -1402,16 +1457,14 @@ function onSearchShortcut(e) {
   }
 }
 
-// geser laci ke bawah untuk menutup (layar kecil)
 function initDrawerSwipe() {
   const CLOSE_DISTANCE = 90;
   let startY = null;
   let drawer = null;
-  const isMobile = () => matchMedia('(max-width:780px)').matches;
 
   document.addEventListener('pointerdown', e => {
     const head = e.target.closest('.drawer-head');
-    if (!head || e.target.closest('button') || !isMobile()) return;
+    if (!head || e.target.closest('button') || !MOBILE.matches) return;
     drawer = head.parentNode;
     startY = e.clientY;
     drawer.style.transition = 'none';
@@ -1433,8 +1486,6 @@ function initDrawerSwipe() {
   document.addEventListener('pointercancel', endSwipe);
 }
 
-// Halaman Belanja: di HP bilah cari dan kategori menyingkir saat menggulir ke bawah dan muncul lagi saat
-// menggulir ke atas; tombol "ke atas" muncul setelah daftar panjang digulir; panah rel kategori mengikuti posisi geser
 function initShopScroll() {
   let lastY = scrollY;
   let frame = 0;
@@ -1447,7 +1498,7 @@ function initShopScroll() {
 
     const tools = $('#tools');
     if (!tools) return;
-    if (!matchMedia('(max-width:780px)').matches || y < 160 || tools.contains(document.activeElement)) {
+    if (!MOBILE.matches || y < 160 || tools.contains(document.activeElement)) {
       tools.classList.remove('away');
       lastY = y;
     } else if (y - lastY > 8) {
@@ -1468,7 +1519,7 @@ function bindEvents() {
   document.addEventListener('change', onChange);
   document.addEventListener('input', onInput);
   document.addEventListener('focusin', onOtpFocus);
-  document.addEventListener('focusin', e => { if (profileMenuOpen() && !e.target.closest('.pm')) setProfileMenu(false); });   // Tab keluar dari menu menutupnya
+  document.addEventListener('focusin', e => { if (profileMenuOpen() && !e.target.closest('.pm')) setProfileMenu(false); });
   document.addEventListener('focusout', onOtpFocus);
   document.addEventListener('pointerup', onOtpPointer);
   document.addEventListener('keydown', onModalKeydown);
@@ -1481,29 +1532,24 @@ function bindEvents() {
   addEventListener('online', () => toast('Tersambung kembali', 'ok'));
 }
 
-// === Mulai ===
-
 async function boot() {
-  storage.remove(STORAGE_KEYS.legacyProfile);   // buang profil lama yang bisa memuat data pengguna sebelumnya
+  storage.remove(STORAGE_KEYS.legacyProfile);
   state.layout = storage.get(STORAGE_KEYS.layout) === 'rows' ? 'rows' : 'grid';
   loadSettings();
   applySettings();
   bindEvents();
+  setInterval(pollQris, QRIS_POLL_MS);
 
   try {
     const me = await api('/auth/me');
     state.csrf = me.csrf;
     state.payInfo = me.pay_info || '';
+    state.dummyQris = Boolean(me.dummy_qris);
+    state.shipping = { fee: Number(me.shipping?.fee) || 0, freeMin: Number(me.shipping?.free_min) || 0 };
     state.resetEnabled = Boolean(me.reset_enabled);
 
-    if (me.user) {
-      state.user = me.user;
-      state.cart = storage.get(STORAGE_KEYS.cart(me.user.id)) || {};
-      await migrateLocalAddress();
-      await show(defaultView());
-    } else {
-      renderAuth('login');
-    }
+    if (me.user) await startSession(me.user);
+    else renderAuth('login');
   } catch (err) {
     $('#app').innerHTML = `<div class="empty" style="margin:15vh auto;max-width:460px"><b>Aplikasi belum bisa dimuat</b><p>${escapeHtml(err.message)}</p><button class="btn primary" data-act="refresh-page">Muat ulang</button></div>`;
   }

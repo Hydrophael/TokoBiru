@@ -22,6 +22,8 @@ Environment variable
     PAY_INFO      opsional: instruksi pembayaran yang tampil di pesanan pelanggan
     PENDING_TTL_HOURS  opsional: batas jam bayar sebelum pesanan dibatalkan otomatis (default 24)
     MAX_PENDING_ORDERS opsional: jumlah pesanan belum dibayar yang boleh dimiliki satu pelanggan (default 3)
+    SHIPPING_FEE  opsional: ongkos kirim flat dalam rupiah (default 10000; 0 = gratis)
+    FREE_SHIPPING_MIN  opsional: belanja minimal untuk gratis ongkir (default 0 = tidak ada)
     SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD / SMTP_FROM
                   opsional: server email untuk kode reset password (port 587 STARTTLS, atau 465 SSL).
                   Tanpa SMTP_HOST dan pengirim (SMTP_FROM atau SMTP_USER), tombol "Lupa password" tidak tampil.
@@ -53,13 +55,9 @@ from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
-# --------------------------------------------------------------------------- #
-# Konfigurasi
-# --------------------------------------------------------------------------- #
 IS_VERCEL = bool(os.environ.get("VERCEL"))
 
 if not IS_VERCEL:
-    # Lokal: baca file .env bila python-dotenv terpasang (variabel yang sudah diset tidak ditimpa)
     try:
         from dotenv import load_dotenv
         load_dotenv()
@@ -68,7 +66,6 @@ if not IS_VERCEL:
 
 
 def _env_str(name, default="", strip=True):
-    """Baca environment variable. Nilai kosong (mis. `MONGO_DB=` dari .env.example) dianggap belum diisi."""
     value = os.environ.get(name) or ""
     if not value.strip():
         return default
@@ -76,6 +73,8 @@ def _env_str(name, default="", strip=True):
 
 
 PAY_INFO = _env_str("PAY_INFO")[:200]
+# Hanya untuk demo: pelanggan bisa melunasi pesanannya sendiri tanpa uang
+DUMMY_QRIS = _env_str("DUMMY_QRIS").lower() in ("1", "true", "ya", "on")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 
@@ -85,11 +84,10 @@ if not SECRET_KEY:
         raise RuntimeError("SECRET_KEY belum diset di Environment Variables Vercel.")
     SECRET_KEY = "dev-only-secret-ganti-di-produksi"
 
-# Body JSON biasanya kecil. Hanya tambah/ubah produk yang boleh lebih besar karena membawa foto (data URL).
 MAX_JSON_BYTES = 64 * 1024
 MAX_PRODUCT_BODY_BYTES = 512 * 1024
 PRODUCT_WRITE_RE = re.compile(r"/api/products(?:/[0-9a-fA-F]{24})?")
-PROFILE_WRITE_RE = re.compile(r"/api/auth/profile")   # foto profil ikut dikirim di body, jadi batas ukurannya sama dengan foto produk
+PROFILE_WRITE_RE = re.compile(r"/api/auth/profile")
 
 app = Flask(__name__)
 app.config.update(
@@ -98,17 +96,14 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=IS_VERCEL,
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
-    MAX_CONTENT_LENGTH=MAX_PRODUCT_BODY_BYTES,   # batas 64 KB untuk route lain dijaga di guard()
+    MAX_CONTENT_LENGTH=MAX_PRODUCT_BODY_BYTES,
 )
 
-# Role
 ROLES = ("user", "admin", "master")
 STAFF_ROLES = ("admin", "master")
-ASSIGNABLE_ROLES = ("user", "admin")  # role yang boleh diberikan master
+ASSIGNABLE_ROLES = ("user", "admin")
 
-# Pesanan
 ORDER_STATUS = ("pending", "paid", "shipped", "completed", "cancelled")
-# Transisi yang boleh dilakukan staf (admin/master)
 TRANSITIONS = {
     "pending": {"paid", "cancelled"},
     "paid": {"shipped", "cancelled"},
@@ -116,12 +111,11 @@ TRANSITIONS = {
     "completed": set(),
     "cancelled": set(),
 }
-# Pelanggan hanya boleh membatalkan pesanan yang belum dibayar dan menerima pesanan yang dikirim
 USER_TRANSITIONS = {("pending", "cancelled"), ("shipped", "completed")}
 REVENUE_STATUS = ("paid", "shipped", "completed")
-OPEN_STATUS = ("pending", "paid", "shipped")   # pesanan yang masih perlu ditangani staf
+OPEN_STATUS = ("pending", "paid", "shipped")
 MAX_CART_LINES = 30
-WIB_OFFSET = timedelta(hours=7)   # batas "hari ini" memakai waktu Indonesia Barat
+WIB_OFFSET = timedelta(hours=7)
 
 
 def _env_int(name, default, minimum=1):
@@ -131,51 +125,46 @@ def _env_int(name, default, minimum=1):
         return default
 
 
-# Pesanan yang belum dibayar dibatalkan otomatis dan stoknya dikembalikan
 PENDING_TTL_HOURS = _env_int("PENDING_TTL_HOURS", 24)
-LOG_RETENTION_DAYS = _env_int("LOG_RETENTION_DAYS", 90)   # log lebih lama dari ini dihapus otomatis oleh MongoDB
-# Stok ditahan sejak pesanan dibuat, jadi satu akun tidak boleh menumpuk pesanan yang belum dibayar
+LOG_RETENTION_DAYS = _env_int("LOG_RETENTION_DAYS", 90)
 MAX_PENDING_ORDERS = _env_int("MAX_PENDING_ORDERS", 3)
-EXPIRE_SWEEP_SECONDS = 60   # jeda minimum antar penyapuan per instance
+SHIPPING_FEE = _env_int("SHIPPING_FEE", 10000, minimum=0)
+FREE_SHIPPING_MIN = _env_int("FREE_SHIPPING_MIN", 0, minimum=0)
+SHIPPING_METHODS = ("delivery", "pickup")
+PAYMENT_METHODS = ("transfer", "cash") + (("qris",) if DUMMY_QRIS else ())
+EXPIRE_SWEEP_SECONDS = 60
 EXPIRE_BATCH = 50
 MAX_QTY_PER_PRODUCT = 99
 
-# Login dan password
 MAX_FAILED_LOGIN = 5
 LOCK_MINUTES = 10
 PASSWORD_MIN_LEN = 8
 PASSWORD_MAX_LEN = 128
 
-# Reset password lewat kode 6 angka yang dikirim ke email. Aktif hanya bila server SMTP dan pengirim diisi.
 SMTP_HOST = _env_str("SMTP_HOST")
 SMTP_PORT = _env_int("SMTP_PORT", 587)
 SMTP_USER = _env_str("SMTP_USER")
 SMTP_PASSWORD = _env_str("SMTP_PASSWORD", strip=False)
 SMTP_FROM = _env_str("SMTP_FROM", SMTP_USER)
-SMTP_TIMEOUT = 8            # detik; fungsi serverless tidak boleh menunggu server email terlalu lama
+SMTP_TIMEOUT = 8
 EMAIL_ENABLED = bool(SMTP_HOST and SMTP_FROM)
 RESET_CODE_LENGTH = 6
-RESET_CODE_MINUTES = 15     # masa berlaku kode (dikirim ke frontend lewat respons /auth/forgot)
-RESET_COOLDOWN_SECONDS = 60    # jeda minimum antar permintaan kode per akun (dipakai frontend untuk hitung mundur)
-MAX_RESET_ATTEMPTS = 5      # tebakan kode yang boleh salah sebelum reset dikunci (terpisah dari kunci login)
+RESET_CODE_MINUTES = 15
+RESET_COOLDOWN_SECONDS = 60
+MAX_RESET_ATTEMPTS = 5
 RESET_LOCK_MINUTES = 10
 
-# Batas jumlah data yang dikirim ke frontend
-LOW_STOCK_LIMIT = 5        # stok <= angka ini dianggap menipis
+LOW_STOCK_LIMIT = 5
 LOW_STOCK_LIST_SIZE = 8
 RECENT_ORDERS_SIZE = 5
 PRODUCTS_LIMIT = 1000
-ORDERS_LIMIT = 200         # pesanan selesai/batal yang ditampilkan (dan batas daftar pesanan pelanggan)
-OPEN_ORDERS_LIMIT = 1000   # pengaman: pesanan berjalan hampir tidak pernah sebanyak ini
+ORDERS_LIMIT = 200
+OPEN_ORDERS_LIMIT = 1000
 USERS_LIMIT = 500
 LOGS_LIMIT = 150
 
-# --------------------------------------------------------------------------- #
-# Database (lazy + cache per instance serverless)
-# --------------------------------------------------------------------------- #
 _db = None
 
-# Collection produk memakai nama dari daftar yang diwajibkan (master_product)
 PRODUCT_COLLECTION = "master_product"
 LEGACY_PRODUCT_COLLECTION = "products"
 
@@ -198,18 +187,13 @@ def mongo_db_name():
 
 
 def migrate_legacy_collections(db):
-    """Pindahkan data dari collection lama `products` ke `master_product` (sekali saja)."""
     names = db.list_collection_names()
     if LEGACY_PRODUCT_COLLECTION in names and PRODUCT_COLLECTION not in names:
         db[LEGACY_PRODUCT_COLLECTION].rename(PRODUCT_COLLECTION)
 
 
 def ensure_unique_order_code_index(db):
-    """Kode pesanan dipakai sebagai referensi pembayaran, jadi harus unik.
-
-    Bila data lama sudah memuat kode ganda, indeks tidak bisa dibuat. Aplikasi tetap berjalan
-    (jangan sampai gagal start) dan masalahnya dicatat agar kode ganda itu dirapikan manual.
-    """
+    # Kode pesanan dipakai sebagai referensi bayar, jadi harus unik
     try:
         db.orders.create_index([("code", ASCENDING)], unique=True)
     except OperationFailure as exc:
@@ -222,9 +206,6 @@ def ensure_indexes(db):
     db[PRODUCT_COLLECTION].create_index([("name", ASCENDING)])
     db[PRODUCT_COLLECTION].create_index([("category", ASCENDING)])
     db[PRODUCT_COLLECTION].create_index([("stock", ASCENDING)])
-    # Indeks teks untuk pencarian produk. Bobot: nama paling penting, lalu kategori, lalu deskripsi.
-    # default_language="none": MongoDB tidak punya stemming/stop word bahasa Indonesia.
-    # Satu collection hanya boleh punya satu indeks teks.
     db[PRODUCT_COLLECTION].create_index(
         [("name", "text"), ("category", "text"), ("description", "text")],
         weights={"name": 5, "category": 2, "description": 1},
@@ -233,15 +214,12 @@ def ensure_indexes(db):
     )
     db.orders.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
     db.orders.create_index([("status", ASCENDING), ("created_at", ASCENDING)])
-    # daftar pesanan staf, "pesanan terbaru" di dashboard, dan ringkasan hari ini hanya memakai created_at
     db.orders.create_index([("created_at", DESCENDING)])
-    db.orders.create_index([("paid_at", DESCENDING)])   # pendapatan hari ini
-    # satu kunci idempotensi hanya boleh dipakai sekali per pelanggan (pesanan tanpa kunci tidak terkena)
+    db.orders.create_index([("paid_at", DESCENDING)])
     db.orders.create_index([("user_id", ASCENDING), ("idem_key", ASCENDING)], unique=True,
                            partialFilterExpression={"idem_key": {"$type": "string"}})
     ensure_unique_order_code_index(db)
     db.logs.create_index([("ts", DESCENDING)])
-    # TTL: MongoDB menghapus log yang lebih tua dari LOG_RETENTION_DAYS, supaya koleksi tidak membengkak
     db.logs.create_index([("ts", ASCENDING)], expireAfterSeconds=LOG_RETENTION_DAYS * 86400, name="logs_ttl")
 
 
@@ -258,9 +236,6 @@ def get_db():
     return db
 
 
-# --------------------------------------------------------------------------- #
-# Error handling
-# --------------------------------------------------------------------------- #
 class ApiError(Exception):
     def __init__(self, message, status=400, fields=None):
         super().__init__(message)
@@ -302,16 +277,12 @@ def handle_413(e):
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(e):
-    """Penjaring terakhir: error HTTP lain diteruskan apa adanya, sisanya jadi 500."""
     if isinstance(e, HTTPException):
         return jsonify({"error": e.description}), e.code
     app.logger.exception("Unhandled error")
     return jsonify({"error": "Terjadi kesalahan pada server"}), 500
 
 
-# --------------------------------------------------------------------------- #
-# Sanitasi & validasi
-# --------------------------------------------------------------------------- #
 TAG_RE = re.compile(r"<[^>]*>")
 CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 BLANK_LINES_RE = re.compile(r"\n{3,}")
@@ -334,7 +305,6 @@ RESET_FAILED_ERROR = "Kode salah atau sudah kedaluwarsa. Minta kode baru bila pe
 
 
 def sanitize(value, multiline=False):
-    """Bersihkan teks: normalisasi unicode, buang karakter kontrol & tag HTML."""
     value = unicodedata.normalize("NFKC", value)
     value = CTRL_RE.sub("", value)
     value = TAG_RE.sub("", value)
@@ -349,7 +319,6 @@ def sanitize(value, multiline=False):
 
 
 def parse_int(raw):
-    """Ubah bilangan bulat (angka atau teks angka) menjadi int; None bila tidak valid."""
     if isinstance(raw, int):
         return raw
     if isinstance(raw, float) and raw.is_integer():
@@ -367,13 +336,11 @@ def is_strong_password(password):
     )
 
 
-IMAGE_MAX_CHARS = 300_000   # panjang data URL (sekitar 220 KB); frontend mengecilkan foto menjadi sekitar 100 KB
+IMAGE_MAX_CHARS = 300_000
 IMAGE_RE = re.compile(r"data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})")
 
 
 def decode_image(raw):
-    """Data URL gambar -> (bytes, mime). Isi diperiksa (base64 sah dan tanda file sesuai jenisnya),
-    jadi hanya JPEG, PNG, dan WebP asli yang tersimpan. ValueError berisi pesan untuk pengguna."""
     if len(raw) > IMAGE_MAX_CHARS:
         raise ValueError("Foto terlalu besar. Pilih foto lain.")
     match = IMAGE_RE.fullmatch(raw)
@@ -395,8 +362,6 @@ def decode_image(raw):
 
 
 class Form:
-    """Validator sederhana: kumpulkan semua error per-field lalu raise sekali."""
-
     def __init__(self, data):
         self.data = data if isinstance(data, dict) else {}
         self.errors = {}
@@ -413,7 +378,7 @@ class Form:
         raw = self.data.get(name)
         if raw is None or raw == "":
             return self._empty(name, label, required)
-        if not isinstance(raw, str):  # cegah NoSQL injection ({"$ne": ...})
+        if not isinstance(raw, str):
             self.errors[name] = f"{label} tidak valid"
             return
         value = sanitize(raw, multiline)
@@ -458,8 +423,6 @@ class Form:
             self.out[name] = number
 
     def image(self, name="image", label="Foto"):
-        """Foto sebagai data URL. Kunci tidak dikirim: foto lama dibiarkan. Kosong: foto dihapus (None).
-        Valid: (bytes, mime)."""
         if name not in self.data:
             return
         raw = self.data[name]
@@ -500,13 +463,10 @@ def object_id(value, label="ID"):
     return ObjectId(value)
 
 
-# --------------------------------------------------------------------------- #
-# Serialisasi (dokumen Mongo -> JSON)
-# --------------------------------------------------------------------------- #
-HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key", "session_version",
+HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key", "session_version", "pay_token",
                  "reset_code_hash", "reset_expires", "reset_sent_at", "reset_failed", "reset_locked_until",
-                 "image", "image_type", "image_v",   # foto produk (/api/products/<id>/image) dan foto akun (/api/auth/avatar)
-                 "addresses")                        # buku alamat: hanya pemiliknya yang boleh membacanya
+                 "image", "image_type", "image_v",
+                 "addresses")
 
 
 def serialize_value(value):
@@ -522,7 +482,6 @@ def serialize_value(value):
 
 
 def serialize(doc):
-    """Dokumen Mongo -> dict siap JSON (tanpa field rahasia, `_id` menjadi `id`)."""
     if doc is None:
         return None
     out = {}
@@ -536,24 +495,28 @@ def serialize(doc):
     return out
 
 
+def order_json(order, user=None):
+    # Tautan bayar hanya untuk pemilik, selama pesanan masih menunggu bayar
+    out = serialize(order)
+    if (order.get("pay_token") and order.get("status") == "pending"
+            and user and user["role"] == "user" and user["_id"] == order.get("user_id")):
+        out["pay_path"] = f"/pay/{order['pay_token']}"
+    return out
+
+
 def public_user(user):
-    """Data akun untuk pemiliknya sendiri (login, /auth/me, ubah profil). Bukan untuk daftar pengguna."""
     if not user:
         return None
     out = {"id": str(user["_id"]), "username": user["username"], "name": user["name"],
            "email": user["email"], "role": user["role"]}
-    if user.get("image_v"):   # ?v= berganti saat foto berganti, jadi browser boleh menyimpannya lama
+    if user.get("image_v"):
         out["photo"] = f"/api/auth/avatar?v={int(user['image_v'])}"
     if user["role"] == "user":
         out["addresses"] = [address_json(item) for item in user.get("addresses", [])]
     return out
 
 
-# --------------------------------------------------------------------------- #
-# Akun: form dan dokumen pengguna
-# --------------------------------------------------------------------------- #
 def user_form(data, with_role=False):
-    """Validasi data akun (dipakai pendaftaran, tambah pengguna, dan CLI master)."""
     form = Form(data)
     form.text("name", "Nama lengkap", 2, 50, regex=PERSON_RE, regex_msg=NAME_ERROR)
     form.text("username", "Username", 3, 20, lower=True, regex=USERNAME_RE,
@@ -566,7 +529,6 @@ def user_form(data, with_role=False):
 
 
 def new_user_doc(fields, role):
-    """Dokumen user baru. `fields` berisi name, username, email, password."""
     return {
         "name": fields["name"],
         "username": fields["username"],
@@ -579,9 +541,6 @@ def new_user_doc(fields, role):
     }
 
 
-# --------------------------------------------------------------------------- #
-# Buku alamat pelanggan (disimpan di dokumen user: users.addresses)
-# --------------------------------------------------------------------------- #
 ADDRESS_LIMIT = 5
 ADDRESS_LABELS = ("Rumah", "Kantor", "Kos", "Lainnya")
 
@@ -592,7 +551,6 @@ def address_json(item):
 
 
 def address_form(data):
-    """Validasi satu alamat. Nomor HP dirapikan dulu (spasi, titik, strip dibuang), sama seperti saat checkout."""
     data = dict(data)
     if isinstance(data.get("phone"), str):
         data["phone"] = re.sub(r"[\s.\-]", "", data["phone"])
@@ -602,22 +560,19 @@ def address_form(data):
     form.text("phone", "Nomor HP", 8, 16, regex=PHONE_RE, regex_msg=PHONE_ERROR)
     form.text("address", "Alamat pengiriman", 5, 200, multiline=True)
     clean = form.done()
-    clean["main"] = data.get("main") is True   # hanya boolean sungguhan: "false" atau 0 tidak dianggap benar
+    clean["main"] = data.get("main") is True
     return clean
 
 
 def save_addresses(db, user, addresses):
-    """Simpan daftar alamat. Selalu tepat satu alamat utama (bila daftar tidak kosong)."""
     if addresses and not any(item.get("main") for item in addresses):
         addresses[0]["main"] = True
     db.users.update_one({"_id": user["_id"]}, {"$set": {"addresses": addresses}})
     return [address_json(item) for item in addresses]
 
 
-# --------------------------------------------------------------------------- #
-# Auth: session, RBAC, CSRF, audit
-# --------------------------------------------------------------------------- #
 SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+# Tanpa script inline; script hanya boleh dari domain sendiri
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; script-src 'self'; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
@@ -633,7 +588,7 @@ SECURITY_HEADERS = {
 
 
 def client_ip():
-    if not has_request_context():   # mis. penyapuan dari skrip, bukan dari request
+    if not has_request_context():
         return ""
     ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.remote_addr or "")
     return sanitize(ip)[:45]
@@ -646,7 +601,7 @@ def current_user():
     uid = session.get("uid")
     if uid and OID_RE.fullmatch(str(uid)):
         user = get_db().users.find_one({"_id": ObjectId(uid)})
-        # session_version naik tiap ganti password: sesi lama (versi berbeda) tidak berlaku lagi
+        # session_version naik tiap ganti password, jadi sesi lama tidak berlaku lagi
         if user and user.get("active", True) and session.get("sv", 0) == user.get("session_version", 0):
             g.user = user
         else:
@@ -674,7 +629,6 @@ def login_required(fn):
 
 
 def audit(action, detail="", actor=None):
-    """Catat aktivitas. Kegagalan mencatat log tidak boleh menggagalkan request."""
     try:
         user = actor or (current_user() if session.get("uid") else None)
         get_db().logs.insert_one({
@@ -697,6 +651,7 @@ def csrf_token_valid():
 
 @app.before_request
 def guard():
+    # Semua request tulis ke API wajib membawa token CSRF dan berbentuk JSON
     if request.path.startswith("/api/") and request.method not in SAFE_METHODS:
         too_big = request.content_length and request.content_length > MAX_JSON_BYTES
         photo_write = (request.method in ("POST", "PUT") and PRODUCT_WRITE_RE.fullmatch(request.path)) or \
@@ -713,21 +668,15 @@ def guard():
 def secure_headers(resp):
     resp.headers.update(SECURITY_HEADERS)
     if request.path.startswith("/api/"):
-        resp.headers.setdefault("Cache-Control", "no-store")   # route foto mengatur cache-nya sendiri
+        resp.headers.setdefault("Cache-Control", "no-store")
     elif resp.mimetype == "text/html":
         resp.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
         resp.headers["Cache-Control"] = "no-cache"
     elif request.path.startswith("/static/"):
-        # Modul JS saling mengimpor, jadi browser wajib memeriksa versi terbaru (ETag) sebelum memakai
-        # cache. Bila file tidak berubah server cukup membalas 304; setelah deploy tidak ada campuran
-        # file lama dan baru.
         resp.headers["Cache-Control"] = "no-cache"
     return resp
 
 
-# --------------------------------------------------------------------------- #
-# Routes: Auth
-# --------------------------------------------------------------------------- #
 DUMMY_HASH = generate_password_hash(secrets.token_hex(8))
 
 
@@ -740,7 +689,6 @@ def start_session(user):
 
 
 def record_failed_login(db, user, now):
-    """Tambah hitungan gagal login; kunci akun sementara bila sudah mencapai batas."""
     failed = user.get("failed", 0) + 1
     changes = {"failed": failed}
     if failed >= MAX_FAILED_LOGIN:
@@ -755,11 +703,12 @@ def account_locked_error():
 
 @app.get("/api/auth/me")
 def auth_me():
-    user = current_user()   # bisa membersihkan sesi (akun nonaktif / sesi dicabut), jadi dipanggil sebelum membuat csrf
+    user = current_user()
     if "csrf" not in session:
         session["csrf"] = secrets.token_urlsafe(32)
     return jsonify({"user": public_user(user), "csrf": session["csrf"], "pay_info": PAY_INFO,
-                    "reset_enabled": EMAIL_ENABLED})
+                    "dummy_qris": DUMMY_QRIS, "reset_enabled": EMAIL_ENABLED,
+                    "shipping": {"fee": SHIPPING_FEE, "free_min": FREE_SHIPPING_MIN}})
 
 
 @app.post("/api/auth/register")
@@ -791,13 +740,11 @@ def auth_login():
     now = utcnow()
     if user and user.get("locked_until") and user["locked_until"] > now:
         raise account_locked_error()
-    # Hash palsu tetap diperiksa agar waktu respons sama untuk akun yang tidak ada
     stored_hash = user["password_hash"] if user else DUMMY_HASH
     password_ok = check_password_hash(stored_hash, clean["password"])
     if user is None or not password_ok:
         if user:
             record_failed_login(db, user, now)
-        # Teks di kolom username sering berisi password yang salah ketik, jadi hanya dicatat bila akunnya memang ada
         audit("login_gagal", f"identifier={identifier[:40]}" if user else "akun tidak dikenal")
         raise ApiError("Username/email atau password salah", 401)
     if not user.get("active", True):
@@ -821,8 +768,6 @@ def auth_logout():
 @app.patch("/api/auth/profile")
 @login_required
 def auth_profile():
-    """Ubah profil sendiri: nama dan foto. Username dan email dipakai untuk masuk dan pemulihan password.
-    Kunci `image` tidak dikirim: foto lama dibiarkan. Kosong: foto dihapus."""
     form = Form(json_body())
     form.text("name", "Nama lengkap", 2, 50, regex=PERSON_RE, regex_msg=NAME_ERROR)
     form.image("image", "Foto profil")
@@ -855,12 +800,11 @@ def auth_profile():
 @app.get("/api/auth/avatar")
 @login_required
 def auth_avatar():
-    """Foto profil milik akun yang sedang masuk (hanya miliknya sendiri)."""
     user = current_user()
     if not user.get("image"):
         raise ApiError("Foto tidak ditemukan", 404)
     resp = Response(bytes(user["image"]), mimetype=user.get("image_type") or "image/jpeg")
-    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"   # alamat berganti (?v=) saat foto berganti
+    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
     return resp
 
 
@@ -917,7 +861,7 @@ def addresses_delete(address_id):
     addresses = list(user.get("addresses", []))
     target = find_address(addresses, address_id)
     addresses = [item for item in addresses if item is not target]
-    if target.get("main") and addresses:   # yang utama dihapus: alamat pertama yang tersisa jadi utama
+    if target.get("main") and addresses:
         addresses[0]["main"] = True
     saved = save_addresses(db, user, addresses)
     audit("alamat_ubah", f"alamat {target['label']} dihapus")
@@ -936,8 +880,6 @@ def auth_password():
     now = utcnow()
     if user.get("locked_until") and user["locked_until"] > now:
         raise account_locked_error()
-    # Password lama yang salah dihitung ke batas gagal login yang sama, supaya sesi yang dicuri tidak
-    # bisa dipakai menebak password lewat endpoint ini.
     if not check_password_hash(user["password_hash"], clean["current_password"]):
         record_failed_login(db, user, now)
         audit("password_gagal", "password lama salah")
@@ -949,22 +891,16 @@ def auth_password():
         "$set": {"password_hash": generate_password_hash(clean["new_password"]),
                  "failed": 0, "locked_until": None},
         "$inc": {"session_version": 1}})
-    # sesi yang dipakai sekarang ikut naik versi; sesi di perangkat lain tidak berlaku lagi
     session["sv"] = db.users.find_one({"_id": user["_id"]}).get("session_version", 1)
     audit("password_ubah", "sesi di perangkat lain dikeluarkan")
     return jsonify({"ok": True})
 
 
-# --- Lupa password: kode 6 angka lewat email -------------------------------------------------- #
-RESET_FIELDS = {"reset_code_hash": "", "reset_expires": "", "reset_sent_at": ""}   # untuk $unset
-# Penghitung tebakan sengaja TIDAK ikut RESET_FIELDS: gagal kirim email tidak boleh menghapus kunci.
-# Hanya dibersihkan saat reset berhasil.
+RESET_FIELDS = {"reset_code_hash": "", "reset_expires": "", "reset_sent_at": ""}
 RESET_GUARD_FIELDS = {"reset_failed": "", "reset_locked_until": ""}
 
 
 def send_email(to, subject, body, html=None, inline_images=None):
-    """Kirim email lewat SMTP: teks biasa, plus versi HTML bila `html` diberikan. Dipisah dari route supaya mudah diganti di tes.
-    `inline_images`: {cid: bytes PNG} untuk gambar yang dipanggil di HTML lewat src="cid:..." (ikut terkirim di dalam email)."""
     message = EmailMessage()
     message["From"] = SMTP_FROM
     message["To"] = to
@@ -975,7 +911,6 @@ def send_email(to, subject, body, html=None, inline_images=None):
         for cid, data in (inline_images or {}).items():
             message.get_payload()[1].add_related(data, "image", "png", cid=f"<{cid}>", disposition="inline")
     use_ssl = SMTP_PORT == 465
-    # Konteks bawaan smtplib TIDAK memeriksa sertifikat server; create_default_context() memeriksanya
     context = ssl.create_default_context()
     if use_ssl:
         server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT, context=context)
@@ -1001,7 +936,6 @@ EMAIL_LOGO_FILE = os.path.join(BASE_DIR, "static", "icons", "icon-192.png")
 
 
 def load_email_logo():
-    """Logo TokoBiru (PNG) untuk header email, atau None bila file tidak terbaca: email tetap terkirim, hanya tanpa logo."""
     try:
         with open(EMAIL_LOGO_FILE, "rb") as f:
             return f.read()
@@ -1010,8 +944,6 @@ def load_email_logo():
 
 
 def reset_email_html(name, code, logo_cid=None):
-    """Versi HTML email kode reset. Hanya `name` yang berasal dari data pengguna, dan di-escape.
-    `logo_cid`: bila diisi, logo ditampilkan dari gambar inline dengan CID itu (lihat send_email)."""
     name = html_escape(name)
     mark = (f'<td style="padding-right:10px"><img src="cid:{logo_cid}" width="40" height="40" alt="" '
             'style="display:block;border:0;border-radius:11px"></td>') if logo_cid else ""
@@ -1040,7 +972,7 @@ def new_reset_code():
 
 
 def reset_code_digest(user_id, code):
-    """Kode disimpan sebagai HMAC (terikat ke akun), bukan teks asli."""
+    # Kode reset disimpan sebagai HMAC, tidak pernah dalam bentuk asli
     return hmac.new(SECRET_KEY.encode(), f"{user_id}:{code}".encode(), hashlib.sha256).hexdigest()
 
 
@@ -1061,7 +993,6 @@ def require_email_enabled():
 
 @app.post("/api/auth/forgot")
 def auth_forgot():
-    """Kirim kode reset ke email akun. Jawabannya selalu sama, terdaftar atau tidak, agar daftar akun tidak bisa ditebak."""
     require_email_enabled()
     form = Form(json_body())
     form.text("email", "Email", 5, 120, lower=True, regex=EMAIL_RE, regex_msg=EMAIL_ERROR)
@@ -1084,37 +1015,28 @@ def auth_forgot():
             send_email(user["email"], "Kode reset password TokoBiru",
                        reset_email_text(name, code), html=reset_email_html(name, code, logo_cid),
                        inline_images={logo_cid: logo} if logo else None)
-        except Exception as exc:   # smtplib punya banyak jenis error; apa pun yang terjadi, kode tidak jadi dipakai
+        except Exception as exc:
             app.logger.error("Gagal mengirim email reset password: %s", exc)
-            db.users.update_one({"_id": user["_id"]}, {"$unset": RESET_FIELDS})   # boleh langsung coba lagi
+            db.users.update_one({"_id": user["_id"]}, {"$unset": RESET_FIELDS})
         else:
             audit("reset_minta", "kode dikirim ke email", user)
-    # Angka konstan, sama untuk email terdaftar maupun tidak: frontend memakainya untuk hitung mundur dan teks bantuan
     return jsonify({"ok": True, "retry_after": RESET_COOLDOWN_SECONDS, "expires_minutes": RESET_CODE_MINUTES})
 
 
 @app.post("/api/auth/reset")
 def auth_reset():
-    """Ganti password memakai kode dari email. Kode sekali pakai.
-
-    Tebakan kode punya penghitung sendiri (reset_failed / reset_locked_until), terpisah dari kunci login:
-    akun yang terkunci karena salah login tetap bisa direset dengan kode benar, dan tebakan kode salah
-    tidak ikut mengunci login pemilik akun."""
     require_email_enabled()
     form = Form(json_body())
     form.text("email", "Email", 5, 120, lower=True, regex=EMAIL_RE, regex_msg=EMAIL_ERROR)
     form.text("code", "Kode", RESET_CODE_LENGTH, RESET_CODE_LENGTH, regex=RESET_CODE_RE, regex_msg=RESET_CODE_ERROR)
     form.password("new_password", "Password baru")
-    clean = form.done()   # kode tidak disentuh bila isian tidak valid, jadi bisa dipakai lagi setelah diperbaiki
+    clean = form.done()
     db = get_db()
     user = db.users.find_one({"email": clean["email"]})
     now = utcnow()
-    # Hanya akun dengan kode yang sedang berlaku yang punya sesuatu untuk ditebak
     pending = bool(user and user.get("active", True) and user.get("reset_code_hash")
                    and user.get("reset_expires") and user["reset_expires"] > now)
     if pending:
-        # Jatah tebakan diambil secara atomik SEBELUM kode dicocokkan. Request yang datang bersamaan
-        # tidak bisa sama-sama membaca hitungan lama lalu menebak tanpa terhitung.
         attempt = db.users.find_one_and_update(
             {"_id": user["_id"], "reset_expires": {"$gt": now}, "reset_code_hash": {"$exists": True},
              "$or": [{"reset_locked_until": {"$exists": False}}, {"reset_locked_until": None},
@@ -1128,16 +1050,13 @@ def auth_reset():
             raise ApiError(RESET_FAILED_ERROR, 422, {"code": "Kode salah atau sudah kedaluwarsa"})
         tries = attempt.get("reset_failed", 1)
         if tries > MAX_RESET_ATTEMPTS:
-            # Tebakan beruntun yang lolos sebelum kunci terpasang tidak dicocokkan. Kunci dipasang lagi di sini
-            # (idempoten) supaya penghitung tidak pernah menggantung di atas batas tanpa kunci.
             lock_reset(db, user, now)
             raise reset_locked_error()
-        # Kode dicocokkan di filter update (bukan di Python), jadi dua request bersamaan tidak bisa memakai kode yang sama
         result = db.users.update_one(
             {"_id": user["_id"], "reset_code_hash": reset_code_digest(user["_id"], clean["code"])},
             {"$set": {"password_hash": generate_password_hash(clean["new_password"]),
                       "failed": 0, "locked_until": None},
-             "$inc": {"session_version": 1},   # semua sesi lama, di perangkat mana pun, tidak berlaku lagi
+             "$inc": {"session_version": 1},
              "$unset": {**RESET_FIELDS, **RESET_GUARD_FIELDS}})
         if result.modified_count == 1:
             audit("password_reset", "lewat kode email", user)
@@ -1147,18 +1066,11 @@ def auth_reset():
             audit("reset_gagal", "kode salah, reset dikunci sementara", user)
             raise reset_locked_error()
         audit("reset_gagal", "kode salah", user)
-    # Pesan sama untuk email tak dikenal, tanpa kode aktif, kode salah, dan kode kedaluwarsa
     raise ApiError(RESET_FAILED_ERROR, 422, {"code": "Kode salah atau sudah kedaluwarsa"})
 
 
 @app.post("/api/auth/reset/check")
 def auth_reset_check():
-    """Periksa kode reset TANPA memakainya, supaya layar kode bisa menolak kode salah sebelum meminta password baru.
-
-    Memakai penghitung tebakan yang sama dengan /auth/reset: tebakan salah di sini dan di sana dijumlahkan,
-    jadi endpoint ini bukan jalan memutar untuk menebak lebih dari batas. Tebakan yang benar dikembalikan
-    jatahnya dan kodenya tetap berlaku; yang memakainya hanya /auth/reset. Jawaban untuk email tak dikenal,
-    tanpa kode aktif, kode salah, dan kedaluwarsa sama persis."""
     require_email_enabled()
     form = Form(json_body())
     form.text("email", "Email", 5, 120, lower=True, regex=EMAIL_RE, regex_msg=EMAIL_ERROR)
@@ -1186,7 +1098,6 @@ def auth_reset_check():
             lock_reset(db, user, now)
             raise reset_locked_error()
         if hmac.compare_digest(str(attempt.get("reset_code_hash", "")), reset_code_digest(user["_id"], clean["code"])):
-            # kode benar: kembalikan jatah tebakan yang barusan diambil; kode tetap berlaku sampai /auth/reset
             db.users.update_one({"_id": user["_id"], "reset_failed": {"$gt": 0}}, {"$inc": {"reset_failed": -1}})
             return jsonify({"ok": True})
         if tries >= MAX_RESET_ATTEMPTS:
@@ -1197,9 +1108,6 @@ def auth_reset_check():
     raise ApiError(RESET_FAILED_ERROR, 422, {"code": "Kode salah atau sudah kedaluwarsa"})
 
 
-# --------------------------------------------------------------------------- #
-# Routes: Produk
-# --------------------------------------------------------------------------- #
 def product_form(data):
     form = Form(data)
     form.text("name", "Nama produk", 2, 80)
@@ -1211,13 +1119,10 @@ def product_form(data):
     return form.done()
 
 
-# Bytes foto tidak ikut dibaca saat daftar produk dimuat; klien mengambilnya lewat /api/products/<id>/image
 NO_IMAGE = {"image": 0}
 
 
 def product_json(doc):
-    """Produk -> JSON. Bila ada foto, `photo` berisi alamat fotonya (?v= berganti saat foto diganti,
-    jadi browser boleh menyimpannya lama)."""
     out = serialize(doc)
     if doc.get("image_v"):
         out["photo"] = f"/api/products/{out['id']}/image?v={int(doc['image_v'])}"
@@ -1225,7 +1130,6 @@ def product_json(doc):
 
 
 def split_image(clean):
-    """Pisahkan foto dari isian produk. Mengembalikan (field untuk $set, field untuk $unset)."""
     if "image" not in clean:
         return {}, {}
     image = clean.pop("image")
@@ -1236,17 +1140,11 @@ def split_image(clean):
 
 
 def text_search_term(search):
-    """Siapkan teks untuk $text. Tanda kutip dan awalan '-' punya arti khusus di $text
-    (frasa dan pengecualian), jadi dibuang supaya masukan pengguna dibaca sebagai kata biasa."""
     words = (word.replace('"', "").replace("\\", "").lstrip("-") for word in search.split())
     return " ".join(word for word in words if word)
 
 
 def search_products(db, search, category):
-    """Cari produk. Tahap 1: indeks teks, diurutkan menurut relevansi. Tahap 2 (bila tahap 1 kosong,
-    mis. kata belum lengkap seperti "ber" untuk "Beras", atau indeks teks tidak tersedia): regex pada nama.
-
-    Mengembalikan (daftar produk, filter yang dipakai) supaya total dihitung dengan filter yang sama."""
     collection = db[PRODUCT_COLLECTION]
     base = {"category": category} if category else {}
     term = text_search_term(search)
@@ -1255,12 +1153,12 @@ def search_products(db, search, category):
         try:
             docs = list(collection.find(text_query, {"_score": {"$meta": "textScore"}, **NO_IMAGE})
                         .sort([("_score", {"$meta": "textScore"})]).limit(PRODUCTS_LIMIT))
-        except OperationFailure as exc:   # mis. indeks teks gagal dibuat; pencarian tetap jalan lewat regex
+        except OperationFailure as exc:
             app.logger.warning("Pencarian teks gagal, memakai regex: %s", exc)
             docs = []
         if docs:
             for doc in docs:
-                doc.pop("_score", None)   # skor hanya untuk pengurutan, tidak dikirim ke klien
+                doc.pop("_score", None)
             return docs, text_query
     regex_query = {**base, "name": {"$regex": re.escape(search), "$options": "i"}}
     docs = list(collection.find(regex_query, NO_IMAGE).sort("name", 1).limit(PRODUCTS_LIMIT))
@@ -1271,7 +1169,7 @@ def search_products(db, search, category):
 @login_required
 def products_list():
     db = get_db()
-    sweep_expired_orders(db)   # stok dari pesanan kedaluwarsa kembali sebelum katalog dikirim
+    sweep_expired_orders(db)
     search = sanitize(str(request.args.get("q", ""))[:50])
     category = sanitize(str(request.args.get("category", ""))[:30])
     if search:
@@ -1299,7 +1197,6 @@ def products_create():
 
 
 def parse_base_stock(data):
-    """Stok yang dilihat staf saat membuka form ubah; None bila klien tidak mengirimnya."""
     raw = data.get("base_stock")
     if raw is None or raw == "":
         return None
@@ -1322,8 +1219,6 @@ def products_update(product_id):
     db = get_db()
     collection = db[PRODUCT_COLLECTION]
 
-    # Bila base_stock dikirim, stok diubah sebagai selisih ($inc) dari yang dilihat staf, sehingga
-    # penjualan yang terjadi saat form terbuka tidak tertimpa. Tanpa base_stock: ditimpa (perilaku lama).
     query = {"_id": target_id}
     new_stock = clean.pop("stock")
     update = {"$set": clean}
@@ -1337,7 +1232,7 @@ def products_update(product_id):
         if delta:
             update["$inc"] = {"stock": delta}
         if delta < 0:
-            query["stock"] = {"$gte": -delta}   # jangan sampai stok jadi negatif
+            query["stock"] = {"$gte": -delta}
 
     result = collection.update_one(query, update)
     if result.matched_count == 0:
@@ -1357,7 +1252,7 @@ def products_image(product_id):
     if not doc or not doc.get("image"):
         raise ApiError("Foto tidak ditemukan", 404)
     resp = Response(bytes(doc["image"]), mimetype=doc.get("image_type") or "image/jpeg")
-    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"   # alamat berganti (?v=) saat foto berganti
+    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
     return resp
 
 
@@ -1372,11 +1267,8 @@ def products_delete(product_id):
     return jsonify({"ok": True})
 
 
-# --------------------------------------------------------------------------- #
-# Routes: Pesanan
-# --------------------------------------------------------------------------- #
-ORDER_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"   # tanpa 0/O dan 1/I/L yang mudah tertukar saat diketik
-ORDER_CODE_LENGTH = 6          # 31^6 = hampir 900 juta kemungkinan per hari
+ORDER_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+ORDER_CODE_LENGTH = 6
 ORDER_CODE_ATTEMPTS = 5
 IDEMPOTENCY_KEY_RE = re.compile(r"[A-Za-z0-9_\-]{8,64}")
 
@@ -1387,7 +1279,6 @@ def new_order_code():
 
 
 def parse_cart_items(items):
-    """Validasi isi keranjang dan gabungkan produk yang sama -> {ObjectId: jumlah}."""
     if not isinstance(items, list) or not items or len(items) > MAX_CART_LINES:
         raise ApiError("Keranjang kosong atau terlalu banyak item", 422)
     wanted = {}
@@ -1404,11 +1295,6 @@ def parse_cart_items(items):
 
 
 def parse_expected_prices(items):
-    """Harga per produk yang dilihat pelanggan saat checkout -> {ObjectId: harga}.
-
-    Opsional: baris tanpa `price` (klien lama) tidak diperiksa. Dipanggil setelah parse_cart_items,
-    jadi `items` dan `product_id` di dalamnya sudah tervalidasi.
-    """
     expected = {}
     for item in items:
         if item.get("price") is None:
@@ -1424,7 +1310,6 @@ def format_rupiah(amount):
 
 
 def release_stock(db, reserved):
-    """Kembalikan stok. `reserved` berisi pasangan (product_id, jumlah)."""
     for product_id, qty in reserved:
         db[PRODUCT_COLLECTION].update_one({"_id": product_id}, {"$inc": {"stock": qty}})
 
@@ -1433,12 +1318,7 @@ _last_sweep = None
 
 
 def sweep_expired_orders(db, force=False):
-    """Batalkan pesanan 'pending' yang melewati batas bayar dan kembalikan stoknya.
-
-    Dijalankan malas (saat ada request) dan dibatasi sekali per EXPIRE_SWEEP_SECONDS per instance,
-    karena di serverless tidak ada proses latar belakang. Kegagalan di sini tidak boleh
-    menggagalkan request utama.
-    """
+    # Dijalankan malas saat ada request, karena serverless tidak punya proses latar belakang
     global _last_sweep
     now_ts = time.monotonic()
     if not force and _last_sweep is not None and now_ts - _last_sweep < EXPIRE_SWEEP_SECONDS:
@@ -1448,9 +1328,9 @@ def sweep_expired_orders(db, force=False):
     cancelled = 0
     try:
         cutoff = utcnow() - timedelta(hours=PENDING_TTL_HOURS)
-        stale = list(db.orders.find({"status": "pending", "created_at": {"$lt": cutoff}}).limit(EXPIRE_BATCH))
+        stale = list(db.orders.find({"status": "pending", "payment_method": {"$ne": "cash"},
+                                     "created_at": {"$lt": cutoff}}).limit(EXPIRE_BATCH))
         for order in stale:
-            # status dicek ulang pada filter: pesanan yang baru dibayar tidak ikut dibatalkan
             result = db.orders.update_one(
                 {"_id": order["_id"], "status": "pending"},
                 {"$set": {"status": "cancelled", "cancel_reason": "expired", "updated_at": utcnow()}})
@@ -1465,11 +1345,6 @@ def sweep_expired_orders(db, force=False):
 
 
 def cancel_pending_orders(db, user_id, reason):
-    """Batalkan semua pesanan 'pending' milik satu akun dan kembalikan stoknya segera.
-
-    Dipakai saat akun dinonaktifkan atau dihapus, supaya stok tidak tertahan sampai pesanan kedaluwarsa.
-    Status dicek ulang pada filter, jadi pesanan yang baru dibayar tidak ikut dibatalkan.
-    """
     cancelled = 0
     for order in db.orders.find({"user_id": user_id, "status": "pending"}):
         result = db.orders.update_one(
@@ -1483,12 +1358,7 @@ def cancel_pending_orders(db, user_id, reason):
 
 
 def reserve_stock(db, wanted, expected_prices=None):
-    """Kurangi stok tiap produk secara atomik dan kembalikan (reserved, baris pesanan).
-
-    Bila satu produk gagal, stok produk lain yang sudah dikurangi dikembalikan. Bila `expected_prices`
-    diberikan, pesanan ditolak (409) untuk produk yang harganya sudah berbeda dari yang dilihat pelanggan;
-    harga yang tercatat di pesanan selalu harga yang sama dengan yang diperiksa di sini.
-    """
+    # Stok dikurangi atomik dan hanya berhasil bila cukup, jadi tidak bisa terjual melebihi stok
     reserved, lines = [], []
     try:
         for product_id, qty in wanted.items():
@@ -1501,7 +1371,6 @@ def reserve_stock(db, wanted, expected_prices=None):
                     f"Harga '{product['name']}' berubah dari {format_rupiah(seen_price)} menjadi "
                     f"{format_rupiah(product['price'])}. Keranjang sudah diperbarui, periksa lagi sebelum memesan.",
                     409)
-            # Pengurangan stok atomik: hanya berhasil jika stok cukup
             result = db[PRODUCT_COLLECTION].update_one(
                 {"_id": product_id, "stock": {"$gte": qty}}, {"$inc": {"stock": -qty}})
             if result.modified_count != 1:
@@ -1517,16 +1386,13 @@ def reserve_stock(db, wanted, expected_prices=None):
 
 
 class OrderReplay(Exception):
-    """Kunci idempotensi sudah dipakai: pesanan yang sama sudah tersimpan."""
-
     def __init__(self, order):
         super().__init__("order replay")
         self.order = order
 
 
 def idempotency_key():
-    """Header Idempotency-Key (opsional). Klien mengirim kunci yang sama saat mengulang request yang
-    sama, sehingga jaringan yang putus tidak menghasilkan pesanan ganda."""
+    # Kunci yang sama saat request diulang mencegah pesanan ganda bila jaringan putus
     raw = request.headers.get("Idempotency-Key", "").strip()
     if not raw:
         return None
@@ -1536,10 +1402,6 @@ def idempotency_key():
 
 
 def replayed_order(db, user, key, wanted):
-    """Pesanan yang sudah dibuat dengan kunci ini (None bila belum ada).
-
-    Kunci yang sama untuk isi keranjang berbeda ditolak, bukan diam-diam mengembalikan pesanan lain.
-    """
     if key is None:
         return None
     order = db.orders.find_one({"user_id": user["_id"], "idem_key": key})
@@ -1551,18 +1413,13 @@ def replayed_order(db, user, key, wanted):
 
 
 def insert_order(db, order, user, key):
-    """Simpan pesanan dengan kode unik; kode diundi ulang bila bentrok.
-
-    Bila bentrokan ternyata karena kunci idempotensi (dua request yang sama berjalan bersamaan),
-    lempar OrderReplay berisi pesanan yang sudah tersimpan.
-    """
     for _ in range(ORDER_CODE_ATTEMPTS):
         order["code"] = new_order_code()
         try:
             db.orders.insert_one(order)
             return order
         except DuplicateKeyError:
-            order.pop("_id", None)   # insert_one menambahkan _id walau gagal
+            order.pop("_id", None)
             if key is not None:
                 existing = db.orders.find_one({"user_id": user["_id"], "idem_key": key})
                 if existing:
@@ -1571,7 +1428,6 @@ def insert_order(db, order, user, key):
 
 
 def check_status_change(user, current_status, new_status):
-    """Pastikan perubahan status diizinkan untuk role ini."""
     if user["role"] == "user":
         if (current_status, new_status) not in USER_TRANSITIONS:
             raise ApiError("Anda tidak dapat mengubah pesanan ke status tersebut", 403)
@@ -1579,14 +1435,16 @@ def check_status_change(user, current_status, new_status):
         raise ApiError(f"Status tidak bisa berubah dari '{current_status}' ke '{new_status}'", 422)
 
 
-def enforce_pending_limit(db, user):
-    """Tolak pesanan baru bila pelanggan sudah punya terlalu banyak pesanan yang belum dibayar.
+def shipping_fee_for(subtotal, method):
+    if method == "pickup" or not SHIPPING_FEE:
+        return 0
+    if FREE_SHIPPING_MIN and subtotal >= FREE_SHIPPING_MIN:
+        return 0
+    return SHIPPING_FEE
 
-    Stok dipotong saat pesanan dibuat dan ditahan sampai pesanan dibayar atau kedaluwarsa, jadi tanpa
-    batas ini satu akun bisa mengosongkan rak tanpa membayar. Memakai status 429, bukan 409, karena
-    frontend menganggap 409 sebagai konflik stok dan memuat ulang katalog. Pengecekan ini tidak atomik:
-    dua request bersamaan bisa melewati batas satu-dua pesanan, yang masih bisa diterima.
-    """
+
+def enforce_pending_limit(db, user):
+    # Stok ditahan sejak pesanan dibuat, jadi pesanan belum dibayar dibatasi per pelanggan
     pending = db.orders.count_documents({"user_id": user["_id"], "status": "pending"})
     if pending >= MAX_PENDING_ORDERS:
         raise ApiError(
@@ -1603,15 +1461,13 @@ def orders_list():
     sweep_expired_orders(db)
     user = current_user()
     if user["role"] in STAFF_ROLES:
-        # Pesanan yang masih berjalan harus selalu tampil, sebesar apa pun riwayatnya; kalau tidak,
-        # pesanan yang sudah dibayar tapi belum dikirim bisa tergeser keluar dari 200 terbaru dan terlewat.
-        # Batas ORDERS_LIMIT hanya berlaku untuk pesanan yang sudah selesai atau dibatalkan.
+        # Pesanan berjalan selalu tampil; batas jumlah hanya untuk yang sudah selesai atau batal
         open_orders = db.orders.find({"status": {"$in": list(OPEN_STATUS)}}).sort("created_at", -1).limit(OPEN_ORDERS_LIMIT)
         closed_orders = db.orders.find({"status": {"$nin": list(OPEN_STATUS)}}).sort("created_at", -1).limit(ORDERS_LIMIT)
         docs = sorted([*open_orders, *closed_orders], key=lambda o: o["created_at"], reverse=True)
     else:
         docs = db.orders.find({"user_id": user["_id"]}).sort("created_at", -1).limit(ORDERS_LIMIT)
-    return jsonify({"orders": [serialize(o) for o in docs]})
+    return jsonify({"orders": [order_json(o, user) for o in docs]})
 
 
 @app.post("/api/orders")
@@ -1619,12 +1475,18 @@ def orders_list():
 def orders_create():
     data = json_body()
     data["phone"] = re.sub(r"[\s.\-]", "", data["phone"]) if isinstance(data.get("phone"), str) else data.get("phone")
+    data.setdefault("shipping_method", "delivery")
+    data.setdefault("payment_method", "transfer")
     form = Form(data)
+    form.choice("shipping_method", "Pengiriman", SHIPPING_METHODS)
+    form.choice("payment_method", "Metode pembayaran", PAYMENT_METHODS)
     form.text("phone", "Nomor HP", 8, 16, regex=PHONE_RE, regex_msg=PHONE_ERROR)
-    form.text("address", "Alamat pengiriman", 5, 200, multiline=True)
+    form.text("address", "Alamat pengiriman", 5, 200, required=data["shipping_method"] != "pickup", multiline=True)
     form.text("recipient", "Nama penerima", 2, 50, required=False, regex=PERSON_RE, regex_msg=NAME_ERROR)
     form.text("note", "Catatan", 0, 200, required=False, multiline=True)
     clean = form.done()
+    if clean["shipping_method"] == "pickup":
+        clean["address"] = ""
     wanted = parse_cart_items(data.get("items"))
     expected_prices = parse_expected_prices(data["items"])
     key = idempotency_key()
@@ -1632,30 +1494,37 @@ def orders_create():
     db = get_db()
     user = current_user()
     previous = replayed_order(db, user, key, wanted)
-    if previous:   # request ulangan: kembalikan pesanan yang sudah ada, stok tidak dipotong lagi
-        return jsonify({"order": serialize(previous), "replayed": True}), 200
-    sweep_expired_orders(db)   # lepaskan stok pesanan kedaluwarsa sebelum menghitung ketersediaan
+    if previous:
+        return jsonify({"order": order_json(previous, user), "replayed": True}), 200
+    sweep_expired_orders(db)
     enforce_pending_limit(db, user)
     reserved, lines = reserve_stock(db, wanted, expected_prices)
     try:
         now = utcnow()
+        subtotal = sum(line["subtotal"] for line in lines)
+        # Ongkir dan total dihitung di server, angka dari klien tidak dipakai
+        fee = shipping_fee_for(subtotal, clean["shipping_method"])
         order = {"user_id": user["_id"], "username": user["username"],
-                 "items": lines, "total": sum(line["subtotal"] for line in lines),
+                 "items": lines, "subtotal": subtotal, "shipping_method": clean["shipping_method"],
+                 "shipping_fee": fee, "payment_method": clean["payment_method"], "total": subtotal + fee,
                  "phone": clean["phone"], "address": clean["address"], "note": clean["note"],
                  "recipient": clean["recipient"],
-                 "status": "pending", "created_at": now, "updated_at": now,
-                 "expires_at": now + timedelta(hours=PENDING_TTL_HOURS)}
+                 "status": "pending", "created_at": now, "updated_at": now}
+        if clean["payment_method"] != "cash":
+            order["expires_at"] = now + timedelta(hours=PENDING_TTL_HOURS)
         if key:
             order["idem_key"] = key
+        if clean["payment_method"] == "qris":
+            order["pay_token"] = secrets.token_urlsafe(16)
         insert_order(db, order, user, key)
-    except OrderReplay as replay:   # request kembar yang berjalan bersamaan sudah menyimpan pesanannya
+    except OrderReplay as replay:
         release_stock(db, reserved)
-        return jsonify({"order": serialize(replay.order), "replayed": True}), 200
+        return jsonify({"order": order_json(replay.order, user), "replayed": True}), 200
     except Exception:
         release_stock(db, reserved)
         raise
     audit("pesanan_buat", f"{order['code']} total {order['total']}")
-    return jsonify({"order": serialize(order)}), 201
+    return jsonify({"order": order_json(order, user)}), 201
 
 
 @app.patch("/api/orders/<order_id>/status")
@@ -1675,21 +1544,99 @@ def orders_status(order_id):
     now = utcnow()
     changes = {"status": new_status, "updated_at": now}
     if new_status == "paid":
-        changes["paid_at"] = now   # dasar penghitungan pendapatan harian
+        changes["paid_at"] = now
+    # Status dicek ulang di filter supaya tidak bentrok dengan perubahan lain
     result = db.orders.update_one({"_id": target_id, "status": current_status}, {"$set": changes})
     if result.modified_count != 1:
         raise ApiError("Status pesanan sudah berubah. Muat ulang data.", 409)
     if new_status == "cancelled":
         release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
     audit("pesanan_status", f"{order['code']}: {current_status} -> {new_status}")
-    return jsonify({"order": serialize(db.orders.find_one({"_id": target_id}))})
+    return jsonify({"order": order_json(db.orders.find_one({"_id": target_id}), user)})
 
 
-# --------------------------------------------------------------------------- #
-# Routes: Dashboard, Pengguna, Log
-# --------------------------------------------------------------------------- #
+PAY_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{16,64}")
+QRIS_ACTOR = {"username": "qris", "role": "-"}
+
+
+def mark_order_paid(db, order, via, actor=None):
+    # Atomik: hanya pesanan yang masih pending yang bisa ditandai dibayar
+    now = utcnow()
+    result = db.orders.update_one(
+        {"_id": order["_id"], "status": "pending"},
+        {"$set": {"status": "paid", "paid_at": now, "paid_via": via, "updated_at": now}})
+    if result.modified_count != 1:
+        return False
+    audit("pesanan_status", f"{order['code']}: pending -> paid", actor)
+    return True
+
+
+def qris_page(ok, title, lines, status=200):
+    color = "#07674c" if ok else "#b42318"
+    shape = '<path d="M15 27l8 8 14-19"/>' if ok else '<path d="M18 18l16 16M34 18L18 34"/>'
+    icon = (f'<svg viewBox="0 0 52 52" width="84" height="84" fill="none" stroke="{color}" stroke-width="3" '
+            f'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="26" cy="26" r="24"/>{shape}</svg>')
+    body = "".join(f"<p>{html_escape(line)}</p>" for line in lines)
+    page = ('<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f'<title>{html_escape(title)} - TokoBiru</title>'
+            '<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f4f7fc;color:#0c2342;'
+            'font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;text-align:center;padding:24px;box-sizing:border-box}'
+            'main{background:#fff;border:1px solid #dce6f3;border-radius:20px;padding:32px 28px;max-width:360px;width:100%}'
+            'h1{font-size:1.35rem;margin:14px 0 8px}p{margin:6px 0;color:#425d7a;line-height:1.45}'
+            'small{display:block;margin-top:18px;color:#566f89;font-size:.8rem}</style></head>'
+            f'<body><main>{icon}<h1>{html_escape(title)}</h1>{body}'
+            '</main></body></html>')
+    return Response(page, status=status, mimetype="text/html")
+
+
+@app.get("/pay/<token>")
+def qris_scan(token):
+    # Tanpa login: token acak di tautan inilah yang membuktikan pemilik pesanan
+    missing = lambda: qris_page(False, "Tautan tidak ditemukan", ["Kode QR ini tidak berlaku."], 404)
+    if not DUMMY_QRIS or not PAY_TOKEN_RE.fullmatch(token):
+        return missing()
+    db = get_db()
+    order = db.orders.find_one({"pay_token": token})
+    if not order:
+        return missing()
+    if order["status"] == "cancelled":
+        return qris_page(False, "Pesanan dibatalkan",
+                         [f"Pesanan {order['code']} sudah dibatalkan atau kedaluwarsa.", "Silakan buat pesanan baru."], 410)
+    if order["status"] == "pending":
+        mark_order_paid(db, order, "qris", QRIS_ACTOR)
+    return qris_page(True, "Pembayaran berhasil", [format_rupiah(order["total"]), f"Pesanan {order['code']}"])
+
+
+@app.get("/api/orders/<order_id>/status")
+@login_required
+def order_status_poll(order_id):
+    db = get_db()
+    sweep_expired_orders(db)
+    user = current_user()
+    order = db.orders.find_one({"_id": object_id(order_id, "Pesanan")}, {"status": 1, "user_id": 1})
+    if not order or (user["role"] == "user" and order["user_id"] != user["_id"]):
+        raise ApiError("Pesanan tidak ditemukan", 404)
+    return jsonify({"status": order["status"]})
+
+
+@app.post("/api/orders/<order_id>/simulate-pay")
+@roles_required("user")
+def order_simulate_pay(order_id):
+    if not DUMMY_QRIS:
+        raise ApiError("QRIS tidak aktif", 404)
+    db = get_db()
+    user = current_user()
+    order = db.orders.find_one({"_id": object_id(order_id, "Pesanan")})
+    if not order or order["user_id"] != user["_id"] or order.get("payment_method") != "qris":
+        raise ApiError("Pesanan tidak ditemukan", 404)
+    if order["status"] == "cancelled":
+        raise ApiError("Pesanan sudah dibatalkan atau kedaluwarsa", 409)
+    mark_order_paid(db, order, "qris")
+    return jsonify({"order": order_json(db.orders.find_one({"_id": order["_id"]}), user)})
+
+
 def order_summary(db):
-    """Jumlah pesanan per status dan total pendapatan dari pesanan yang sudah dibayar."""
     by_status = {status: 0 for status in ORDER_STATUS}
     revenue = 0
     pipeline = [{"$group": {"_id": "$status", "n": {"$sum": 1}, "sum": {"$sum": "$total"}}}]
@@ -1703,11 +1650,6 @@ def order_summary(db):
 
 
 def today_summary(db):
-    """Pesanan masuk (menurut tanggal dibuat) dan pendapatan (menurut tanggal dibayar) sejak 00:00 WIB hari ini.
-
-    Pesanan lama yang dibayar sebelum `paid_at` ada tidak punya tanggal bayar; untuk mereka dipakai
-    tanggal dibuat seperti sebelumnya.
-    """
     local_now = utcnow() + WIB_OFFSET
     start = local_now.replace(hour=0, minute=0, second=0, microsecond=0) - WIB_OFFSET
     revenue = 0
@@ -1746,8 +1688,6 @@ def stats():
 
 
 def user_listing(doc):
-    """Data pengguna untuk daftar master: seperti serialize(), ditambah alamat foto bila akun punya foto.
-    Alamatnya hanya bisa dibuka master (lihat users_avatar); ?v= berganti saat foto berganti."""
     out = serialize(doc)
     if doc.get("image_v"):
         out["photo"] = f"/api/users/{out['id']}/avatar?v={int(doc['image_v'])}"
@@ -1757,7 +1697,6 @@ def user_listing(doc):
 @app.get("/api/users")
 @roles_required("master")
 def users_list():
-    # isi foto (image) tidak ikut diambil: daftar hanya butuh image_v untuk membentuk alamat fotonya
     docs = get_db().users.find({}, {"image": 0}).sort("created_at", 1).limit(USERS_LIMIT)
     return jsonify({"users": [user_listing(u) for u in docs]})
 
@@ -1765,13 +1704,12 @@ def users_list():
 @app.get("/api/users/<user_id>/avatar")
 @roles_required("master")
 def users_avatar(user_id):
-    """Foto profil pengguna mana pun, untuk halaman Pengguna. Khusus master; pelanggan dan admin ditolak."""
     target_id = object_id(user_id, "Pengguna")
     doc = get_db().users.find_one({"_id": target_id}, {"image": 1, "image_type": 1})
     if not doc or not doc.get("image"):
         raise ApiError("Foto tidak ditemukan", 404)
     resp = Response(bytes(doc["image"]), mimetype=doc.get("image_type") or "image/jpeg")
-    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"   # alamat berganti (?v=) saat foto berganti
+    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
     return resp
 
 
@@ -1842,7 +1780,6 @@ def users_delete(user_id):
 @app.get("/api/logs")
 @roles_required("master")
 def logs_list():
-    # "log_hapus" tidak lagi dibuat, tapi baris lama (atau dari server berkode lama) tidak boleh tampil di daftar
     docs = get_db().logs.find({"action": {"$ne": "log_hapus"}}).sort("ts", -1).limit(LOGS_LIMIT)
     return jsonify({"logs": [serialize(log) for log in docs]})
 
@@ -1850,7 +1787,6 @@ def logs_list():
 @app.post("/api/logs/delete")
 @roles_required("master")
 def logs_delete():
-    """Hapus satu atau beberapa log sekaligus (hanya master). Penghapusan tidak dicatat sebagai log baru."""
     ids = json_body().get("ids")
     if not isinstance(ids, list) or not 1 <= len(ids) <= LOGS_LIMIT:
         raise ApiError(f"Pilih 1 sampai {LOGS_LIMIT} log", 422)
@@ -1865,13 +1801,9 @@ def health():
     return jsonify({"status": "ok"})
 
 
-# --------------------------------------------------------------------------- #
-# Akun master pertama
-# --------------------------------------------------------------------------- #
 def bootstrap(db):
-    """Buat akun master dari environment variable bila belum ada master."""
     username, email = (_env_str(key) for key in ("MASTER_USERNAME", "MASTER_EMAIL"))
-    password = _env_str("MASTER_PASSWORD", strip=False)   # password dipakai apa adanya
+    password = _env_str("MASTER_PASSWORD", strip=False)
     if not (username and email and password):
         return
     try:
@@ -1907,9 +1839,6 @@ def create_master_cli():
     print(f"Akun master '{clean['username']}' dibuat.")
 
 
-# --------------------------------------------------------------------------- #
-# Data demo (simulasi multi user dan multi role)
-# --------------------------------------------------------------------------- #
 DEMO_PASSWORD = "demo12345"
 DEMO_USERS = (
     ("Master Demo", "master_demo", "master", "master"),
@@ -1925,7 +1854,6 @@ DEMO_PRODUCTS = (
 
 
 def seed_demo(db):
-    """Isi akun demo (satu per role) dan contoh produk. Aman dijalankan berulang."""
     created = []
     for name, username, email_name, role in DEMO_USERS:
         if db.users.find_one({"username": username}):
@@ -1949,9 +1877,6 @@ def seed_demo_cli():
         print(f"  {role:<7} {username}" + ("" if username in created else "  (sudah ada)"))
 
 
-# --------------------------------------------------------------------------- #
-# Frontend (templates/index.html, static/style.css, static/app.js)
-# --------------------------------------------------------------------------- #
 @app.get("/")
 def index():
     return send_from_directory(TEMPLATE_DIR, "index.html", mimetype="text/html")
@@ -1959,8 +1884,6 @@ def index():
 
 @app.get("/sw.js")
 def service_worker():
-    """Service worker harus disajikan dari akar situs agar cakupannya seluruh aplikasi (bukan hanya /static/).
-    no-cache: browser selalu memeriksa versi terbaru, jadi pembaruan sampai ke pengguna setelah deploy."""
     resp = send_from_directory(app.static_folder, "sw.js", mimetype="text/javascript")
     resp.headers["Cache-Control"] = "no-cache"
     return resp

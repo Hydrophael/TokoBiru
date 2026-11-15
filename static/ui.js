@@ -1,12 +1,7 @@
-// TokoBiru - komponen UI umum: toast, modal, dan animasi
-
 import { $, $$, MAX_TOASTS, escapeHtml, formatRupiah } from './core.js';
 
 export const EASE = 'cubic-bezier(.2,.8,.2,1)';
 
-// === Komponen UI ===
-
-// --- Toast ---
 export function toast(message, type = '', action) {
   const box = $('#toasts');
   const el = document.createElement('div');
@@ -35,11 +30,9 @@ export function toast(message, type = '', action) {
   setTimeout(dismiss, type === 'err' || action ? 6000 : 4000);
 }
 
-// --- Modal ---
-let modalResolve = null;      // resolver milik confirmDialog yang sedang terbuka
-let modalReturnFocus = null;  // elemen yang fokusnya dikembalikan saat modal ditutup
+let modalResolve = null;
+let modalReturnFocus = null;
 
-// hubungkan <label> dengan input di .field (aksesibilitas)
 export function linkLabels(root) {
   let counter = 0;
   $$('.field', root).forEach(field => {
@@ -88,13 +81,11 @@ export function closeModal() {
     resolve(false);
   }
 
-  // Modal menutup dengan animasi singkat, lalu dilepas dari halaman
   if (!overlay || reducedMotion.matches) { root.innerHTML = ''; return; }
   overlay.classList.add('leaving');
   setTimeout(() => { if (overlay.isConnected && overlay.classList.contains('leaving')) overlay.remove(); }, 170);
 }
 
-// resolve true bila OK, false bila batal/ditutup
 export function confirmDialog(title, message, okLabel, danger = false) {
   return new Promise(resolve => {
     modalResolve = resolve;
@@ -104,12 +95,10 @@ export function confirmDialog(title, message, okLabel, danger = false) {
   });
 }
 
-// --- Gerak dan animasi ---
-// Mengikuti pengaturan perangkat, atau pilihan "Kurangi animasi" di menu Pengaturan (kelas .calm di <html>)
 const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+// Ikut pengaturan perangkat atau pilihan "Kurangi animasi" di Pengaturan
 export const reducedMotion = { get matches() { return motionQuery.matches || document.documentElement.classList.contains('calm'); } };
 
-// Angka berjalan dari nilai lama ke nilai baru (mis. total keranjang)
 const tweens = new WeakMap();
 export function tweenNumber(el, to, format) {
   const from = Number(el.dataset.value ?? to);
@@ -126,7 +115,6 @@ export function tweenNumber(el, to, format) {
   tweens.set(el, requestAnimationFrame(step));
 }
 
-// pakai View Transition bila didukung
 export const withTransition = update =>
   (!reducedMotion.matches && document.startViewTransition) ? document.startViewTransition(update) : update();
 
@@ -138,7 +126,7 @@ export function flyToCart(from) {
 
   const isPhoto = from instanceof HTMLImageElement;
   const fromBox = from.getBoundingClientRect();
-  const size = 56;   // foto terbang sebagai kotak kecil, bukan sebesar kartu
+  const size = 56;
   const startBox = isPhoto
     ? { left: fromBox.left + fromBox.width / 2 - size / 2, top: fromBox.top + fromBox.height / 2 - size / 2, width: size, height: size }
     : fromBox;
@@ -195,14 +183,14 @@ export function animateDashboard(root) {
   });
 }
 
+// Cegah closeModal() meresolve false saat dialog diterima
 export function confirmAccepted() {
   const resolve = modalResolve;
-  modalResolve = null; // cegah closeModal() meresolve false
+  modalResolve = null;
   closeModal();
   if (resolve) resolve(true);
 }
 
-// Konfeti kecil berwarna merek (kuning dan biru) memercik dari sebuah elemen, mis. centang "berhasil"
 export function burst(el, count = 18) {
   if (reducedMotion.matches || !el || !el.isConnected) return;
 

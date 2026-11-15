@@ -1,14 +1,8 @@
-// TokoBiru - dasar aplikasi: konstanta, state, fungsi bantu, dan klien API
-
-// === Konstanta ===
-
 export const ROLE_LABEL = { user: 'Pelanggan', admin: 'Admin', master: 'Master' };
 
-// Buku alamat: batas dan label harus sama dengan app.py (ADDRESS_LIMIT, ADDRESS_LABELS)
 export const ADDRESS_LIMIT = 5;
 export const ADDRESS_LABELS = ['Rumah', 'Kantor', 'Kos', 'Lainnya'];
 
-// Informasi untuk "Tentang aplikasi". Naikkan versi tiap rilis.
 export const APP_INFO = {
   name: 'TokoBiru',
   version: '1.1.0',
@@ -16,7 +10,6 @@ export const APP_INFO = {
   stack: 'Flask, MongoDB, JavaScript'
 };
 
-// status: [label, warna tag]
 export const STATUS = {
   pending:   ['Menunggu bayar', 'warn'],
   paid:      ['Dibayar', 'info'],
@@ -25,7 +18,6 @@ export const STATUS = {
   cancelled: ['Dibatalkan', 'err']
 };
 
-// Nama aksi log yang ramah dibaca. Kode di database tetap bentuk lama (login_gagal, dst.); hanya tampilannya yang diubah.
 const ACTION_LABEL = {
   register: 'Daftar Akun', login: 'Login', login_gagal: 'Login Gagal', logout: 'Logout',
   password_ubah: 'Password Diubah', password_gagal: 'Ganti Password Gagal', reset_minta: 'Minta Reset Password',
@@ -37,13 +29,11 @@ const ACTION_LABEL = {
   akses_ditolak: 'Akses Ditolak'
 };
 
-// Huruf pertama tiap kata dibuat kapital. Alamat email dibiarkan; kata yang diawali tanda baca ("/api", "=") tidak diubah.
 const capitalizeWords = text => String(text ?? '').replace(/(^|\s)(\S+)/g, (_, space, word) =>
   space + (word.includes('@') ? word : word.replace(/^([(\["“]*)(\p{Ll})/u, (_m, open, ch) => open + ch.toUpperCase())));
 
 export const actionLabel = action => ACTION_LABEL[action] || capitalizeWords(String(action ?? '').replace(/_/g, ' '));
 
-// Detail perubahan pengguna dari server berbentuk kamus Python ("siti: {'role': 'user'}"): diubah jadi kalimat biasa
 const DETAIL_KEY = { role: 'peran', active: 'status' };
 const DETAIL_VALUE = { user: 'Pelanggan', admin: 'Admin', master: 'Master', True: 'Aktif', False: 'Nonaktif' };
 const plainChanges = text => text.replace(/\{([^{}]*)\}/g, (_, body) => body.split(',')
@@ -54,13 +44,12 @@ const plainChanges = text => text.replace(/\{([^{}]*)\}/g, (_, body) => body.spl
 
 export function detailLabel(log) {
   let text = plainChanges(String(log.detail ?? ''));
-  if (log.action === 'pesanan_status') {   // "pending -> paid" jadi "Menunggu bayar → Dibayar"
+  if (log.action === 'pesanan_status') {
     text = text.replace(/\b(pending|paid|shipped|completed|cancelled)\b/g, key => STATUS[key][0]).replace(' -> ', ' → ');
   }
   return capitalizeWords(text);
 }
 
-// Warna tag aksi: merah = gagal/ditolak, kuning = penghapusan, hijau = dibuat, biru = diubah, netral = masuk/keluar
 export function logTone(action) {
   if (/gagal|ditolak/.test(action)) return 'err';
   if (/_hapus$|kedaluwarsa/.test(action)) return 'warn';
@@ -69,7 +58,6 @@ export function logTone(action) {
   return '';
 }
 
-// Kelompok cepat di atas tabel Log (menurut kode aksi di database)
 export const LOG_GROUPS = [
   { id: '',        label: 'Semua',            test: () => true },
   { id: 'alert',   label: 'Perlu dicek',      test: action => /gagal|ditolak/.test(action) },
@@ -79,7 +67,6 @@ export const LOG_GROUPS = [
   { id: 'user',    label: 'Pengguna',         test: action => action.startsWith('user_') }
 ];
 
-// Log yang lolos filter di state.logFilter (dipakai tabel Webix, tabel HTML, dan hitungan)
 export function filteredLogs() {
   const { q, group, action } = state.logFilter;
   const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -92,7 +79,6 @@ export function filteredLogs() {
   });
 }
 
-// urutan langkah di timeline
 export const ORDER_FLOW = ['pending', 'paid', 'shipped', 'completed'];
 
 export const NAV = [
@@ -105,20 +91,31 @@ export const NAV = [
 ];
 
 export const STORAGE_KEYS = {
-  profile: userId => 'tb_profile_' + userId,   // data lama (HP/alamat di perangkat): dipindah ke akun sekali lalu dihapus
-  legacyProfile: 'tb_profile',                 // kunci lama tanpa ID pengguna, dibuang saat aplikasi dimuat
+  profile: userId => 'tb_profile_' + userId,
+  legacyProfile: 'tb_profile',
   cart: userId => 'tb_cart_' + userId,
-  layout: 'tb_shop_layout',                    // pilihan tampilan katalog (kartu / daftar), per perangkat
-  settings: 'tb_settings'                      // ukuran teks, animasi, getar (per perangkat)
+  layout: 'tb_shop_layout',
+  settings: 'tb_settings'
 };
 
 export const MAX_CART_QTY = 99;
-const LOW_STOCK_LIMIT = 5;
-const STOCK_BAR_FULL = 40;   // stok yang dianggap "penuh" pada bar stok
-export const MAX_TOASTS = 2;
-export const SHOP_PAGE_SIZE = 12;   // kartu produk yang ditambahkan tiap tahap (katalog besar dimuat bertahap)
 
-// emoji dipilih dari kata kunci di nama/kategori
+export const SHIPPING_LABEL = { delivery: 'Antar ke alamat', pickup: 'Ambil di toko' };
+// Kode harus sama dengan PAYMENT_METHODS di app.py
+export const PAYMENT_LABEL = { transfer: 'Transfer bank', cash: 'Bayar tunai', qris: 'QRIS' };
+export const paymentChoices = () => Object.fromEntries(Object.entries(PAYMENT_LABEL).filter(([code]) => code !== 'qris' || state.dummyQris));
+
+// Aturan sama dengan shipping_fee_for() di app.py; total akhir tetap dihitung server
+export function shippingFeeFor(subtotal, method) {
+  const { fee, freeMin } = state.shipping;
+  if (method === 'pickup' || !fee) return 0;
+  return freeMin && subtotal >= freeMin ? 0 : fee;
+}
+const LOW_STOCK_LIMIT = 5;
+const STOCK_BAR_FULL = 40;
+export const MAX_TOASTS = 2;
+export const SHOP_PAGE_SIZE = 12;
+
 const EMOJI_RULES = [
   [/beras|padi/i, '🌾'], [/minyak/i, '🫒'], [/telur/i, '🥚'], [/kopi/i, '☕'],
   [/\bteh\b/i, '🍵'], [/susu/i, '🥛'], [/roti|kue|biskuit/i, '🍞'], [/madu/i, '🍯'],
@@ -128,7 +125,6 @@ const EMOJI_RULES = [
   [/buah|apel|jeruk|pisang/i, '🍎'], [/sayur|bayam|wortel|tomat|cabai/i, '🥬'],
   [/daging|ayam|sapi|ikan/i, '🍗'], [/snack|keripik|camilan/i, '🍿'],
   [/jus|soda|sirup|minuman/i, '🧃'], [/obat|vitamin/i, '💊'], [/bayi|popok/i, '🍼'],
-  // elektronik (dicek paling akhir supaya kata umum tidak menimpa aturan di atas)
   [/laptop|notebook|lenovo|asus|acer|macbook|komputer|\bpc\b/i, '💻'],
   [/\bhp\b|ponsel|smartphone|iphone|samsung|xiaomi|oppo|vivo|realme/i, '📱'],
   [/headset|headphone|earphone|speaker|audio/i, '🎧'], [/\btv\b|televisi|monitor/i, '📺'],
@@ -166,66 +162,59 @@ const ICONS = {
   info:    '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>'
 };
 
-// style opsional dipakai di halaman masuk (teks brand di atas latar biru)
 export const brandHtml = (style = '') =>
   `<div class="brand"${style ? ` style="${style}"` : ''}><span class="mark"></span><span>TokoBiru</span></div>`;
-
-// === State ===
 
 export const state = {
   user: null,
   csrf: '',
   payInfo: '',
-  resetEnabled: false,   // true bila server bisa mengirim kode reset password lewat email
-  reset: null,           // alur Lupa password yang sedang berjalan: { email, sentTo, endAt, code }
+  dummyQris: false,
+  shipping: { fee: 0, freeMin: 0 },
+  resetEnabled: false,
+  reset: null,
   view: 'shop',
   authTab: 'login',
 
-  // katalog dan keranjang
   products: [],
-  productsTotal: 0,      // jumlah produk di server (bisa lebih besar dari yang dimuat)
-  productMap: {},        // id produk -> produk
+  productsTotal: 0,
+  productMap: {},
   categories: [],
   category: '',
   query: '',
-  searchIds: null,       // id produk hasil pencarian server, urut menurut relevansi (null = pakai filter lokal)
-  sort: 'auto',          // auto = Nama A-Z, atau paling relevan bila ada kata pencarian
-  filters: { inStock: false, min: null, max: null },   // filter stok dan rentang harga
-  layout: 'grid',        // 'grid' (kartu) atau 'rows' (daftar ringkas)
-  shopLimit: SHOP_PAGE_SIZE,   // jumlah kartu yang sedang tampil
-  cart: {},              // id produk -> jumlah
+  searchIds: null,
+  sort: 'auto',
+  filters: { inStock: false, min: null, max: null },
+  layout: 'grid',
+  shopLimit: SHOP_PAGE_SIZE,
+  cart: {},
 
-  // data per halaman
   orders: [],
   orderFilter: '',
   justUpdatedOrderId: null,
-  fresh: false,          // true saat halaman baru dibuka (animasi masuk hanya saat itu)
-  checkout: null,        // { signature, key, at }: kunci idempotensi untuk percobaan checkout yang sama
+  fresh: false,
+  checkout: null,
   stats: null,
   users: [],
   logs: [],
-  selectedLogs: new Set(),  // id log yang dicentang untuk dihapus
-  logFilter: { q: '', group: '', action: '' },  // filter halaman Log: kata kunci, kelompok, kode aksi
-  productFilter: { group: '', category: '' }    // filter halaman Produk; kata kunci di state.query
+  selectedLogs: new Set(),
+  logFilter: { q: '', group: '', action: '' },
+  productFilter: { group: '', category: '' }
 };
 
 export const isCustomer = () => state.user?.role === 'user';
 export const isStaff = () => !isCustomer();
 export const defaultView = () => (isCustomer() ? 'shop' : 'dashboard');
-export const cartQty = id => state.cart[id] || 0;  // jumlah produk di keranjang
+export const cartQty = id => state.cart[id] || 0;
 
-// === Util ===
-
-// --- DOM ---
 export const $ = (selector, root = document) => root.querySelector(selector);
 export const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
-// --- Format ---
 const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 export const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
 
 const formatNumber = amount => Number(amount || 0).toLocaleString('id-ID');
-const NBSP = '\u00a0'; // spasi tak terputus: "Rp" dan angka tidak pernah pindah baris
+const NBSP = '\u00a0';
 export const formatRupiah = amount => 'Rp' + NBSP + formatNumber(amount);
 export const priceHtml = amount => `<span class="price num"><small>Rp</small>${formatNumber(amount)}</span>`;
 
@@ -237,47 +226,40 @@ export function formatDate(iso) {
 export const getInitials = name =>
   (String(name).trim().split(/\s+/).slice(0, 2).map(word => word[0]).join('') || '?').toUpperCase();
 
-// Warna avatar (0-4) tetap untuk satu pengguna, dipilih dari username
 export const avatarTone = user => hashString(user?.username || user?.name || '') % 5;
 
 export const hashString = text => [...String(text)].reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) >>> 0, 7);
 
 export const createError = (message, extra) => Object.assign(new Error(message), extra);
 
-// Kunci acak untuk satu percobaan request (dikirim sebagai header Idempotency-Key)
 export function newRequestKey() {
-  if (crypto.randomUUID) return crypto.randomUUID();   // randomUUID hanya ada di konteks aman (https/localhost)
+  if (crypto.randomUUID) return crypto.randomUUID();
   return [...crypto.getRandomValues(new Uint8Array(16))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
-// --- Penyimpanan lokal (aman terhadap error / mode privat) ---
 export const storage = {
   get(key) {
     try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
   },
   set(key, value) {
-    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* abaikan */ }
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch { }
   },
   remove(key) {
-    try { localStorage.removeItem(key); } catch { /* abaikan */ }
+    try { localStorage.removeItem(key); } catch { }
   }
 };
 
-// --- Produk dan ikon ---
 export function productEmoji(product) {
   const match = EMOJI_RULES.find(([pattern]) => pattern.test(product.name + ' ' + product.category));
   return match ? match[1] : DEFAULT_EMOJI;
 }
 
-// Foto produk: server memberi alamat foto di field `photo` (/api/products/<id>/image?v=...). Hanya alamat dengan
-// bentuk itu yang dipakai; nilai lain dianggap tidak ada foto.
 const PHOTO_URL_PATTERN = /^\/api\/products\/[0-9a-f]{24}\/image\?v=\d+$/;
 export function productImage(product) {
   const photo = product?.photo;
   return typeof photo === 'string' && PHOTO_URL_PATTERN.test(photo) ? photo : '';
 }
 
-// Isi .tile dan .dtile: foto bila ada, emoji bila tidak
 export function tileVisualHtml(product) {
   const image = productImage(product);
   return image
@@ -285,14 +267,11 @@ export function tileVisualHtml(product) {
     : `<span class="ini" aria-hidden="true">${productEmoji(product)}</span>`;
 }
 
-// Kotak kecil (keranjang, tabel): foto bila ada, emoji bila tidak
 export function miniHtml(product) {
   const image = productImage(product);
   return `<span class="mini${image ? ' has-photo' : ''}" aria-hidden="true">${image ? `<img src="${image}" alt="" loading="lazy" decoding="async">` : productEmoji(product)}</span>`;
 }
 
-// Deskripsi panjang yang ditulis sebagai "Judul - Kunci: nilai - Kunci: nilai" (atau dipisah baris)
-// ditampilkan sebagai daftar spesifikasi supaya mudah dibaca. Teks pendek tetap berupa paragraf biasa.
 const SPEC_SPLIT = /\n+|\s+[-–•]\s+/;
 const SPEC_PAIR = /^([^:]{2,28}):\s*(.+)$/;
 
@@ -303,7 +282,6 @@ export function descriptionHtml(text) {
   const parts = raw.split(SPEC_SPLIT).map(part => part.trim()).filter(Boolean);
   if (parts.length < 3) return `<p class="sub">${escapeHtml(raw)}</p>`;
 
-  // bagian pertama tanpa "kunci:" dianggap kalimat pembuka
   const intro = SPEC_PAIR.test(parts[0]) ? '' : parts.shift();
   const rows = parts.map(part => {
     const pair = part.match(SPEC_PAIR);
@@ -318,7 +296,6 @@ export function descriptionHtml(text) {
 export const icon = (name, size = 17) =>
   `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
-// --- Potongan HTML yang dipakai banyak tampilan ---
 export const emptyState = (title, text = '', action = '') =>
   `<div class="empty"><b>${escapeHtml(title)}</b><p>${escapeHtml(text)}</p>${action}</div>`;
 
@@ -352,7 +329,6 @@ export function managedProducts() {
   );
 }
 
-// Versi ringkas untuk kartu: angka stok biasa saja, hanya yang menipis atau habis diberi tanda
 export function stockNote(product) {
   const { stock } = product;
   if (stock === 0) return '<span class="stock-note out">Habis</span>';
@@ -360,7 +336,6 @@ export function stockNote(product) {
   return `<span class="stock-note">Stok ${stock}</span>`;
 }
 
-// Label di pojok foto kartu: hanya untuk stok yang menipis atau habis
 export function stockFlag(product) {
   if (product.stock === 0) return '<span class="tile-flag out">Habis</span>';
   if (product.stock <= LOW_STOCK_LIMIT) return `<span class="tile-flag low">Tinggal ${product.stock}</span>`;
@@ -370,9 +345,6 @@ export function stockFlag(product) {
 export const payRow = (label, value, copyText, copyLabel = label) =>
   `<div class="pay-row"><span>${label}</span><b class="num">${escapeHtml(value)}</b><button class="btn sm" data-act="copy" data-label="${copyLabel}" data-text="${escapeHtml(copyText)}">Salin</button></div>`;
 
-// === API ===
-
-// Diisi oleh app.js supaya api() tidak perlu mengenal tampilan (menghindari import melingkar)
 export const hooks = { onSessionExpired() {} };
 
 export async function api(path, { method = 'GET', body, headers } = {}) {
@@ -395,7 +367,7 @@ export async function api(path, { method = 'GET', body, headers } = {}) {
   }
 
   let data = {};
-  try { data = await response.json(); } catch { /* respons tanpa body JSON */ }
+  try { data = await response.json(); } catch { }
 
   if (!response.ok) {
     const sessionExpired = response.status === 401 && !path.startsWith('/auth/');

@@ -43,7 +43,8 @@ export function syncInstall() {
 }
 
 addEventListener('beforeinstallprompt', event => {
-  event.preventDefault();   // tombol "Pasang aplikasi" di menu yang memunculkannya
+  // Tanpa preventDefault(): Chrome tidak mencatat peringatan "Banner not shown" di Console.
+  // Event disimpan, dan tombol "Pasang aplikasi" di menu yang memunculkan dialognya lewat installApp().
   installEvent = event;
   syncInstall();
 });

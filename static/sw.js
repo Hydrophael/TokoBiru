@@ -6,9 +6,9 @@
 // - File lain (halaman, JS, CSS) memakai "jaringan dulu": bila ada sinyal, versi terbaru yang dipakai,
 //   jadi setelah deploy tidak ada campuran file lama dan baru. Salinan tersimpan hanya dipakai saat offline.
 
-const CACHE = 'tokobiru-shell-v4';
+const CACHE = 'tokobiru-shell-v5';
 const SHELL = ['/', '/static/style.css', '/static/app.js', '/static/core.js', '/static/views.js',
-  '/static/ui.js', '/static/photo.js', '/static/settings.js', '/static/layout.js', '/static/webix-core.js', '/static/logs-grid.js', '/static/products-grid.js', '/static/theme.js'];
+  '/static/ui.js', '/static/photo.js', '/static/settings.js', '/static/layout.js', '/static/webix-core.js', '/static/logs-grid.js', '/static/products-grid.js', '/static/theme.js', '/static/qr.js', '/static/pwa.js'];
 
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -33,6 +33,7 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;       // font Google dan lainnya diurus browser
   if (url.pathname.startsWith('/api/')) return;           // data hidup: tidak disimpan
+  if (url.pathname.startsWith('/pay/')) return;           // halaman bayar QRIS: jangan disimpan
   if (url.pathname === '/sw.js') return;
 
   event.respondWith(
