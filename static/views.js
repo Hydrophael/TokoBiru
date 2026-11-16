@@ -966,7 +966,7 @@ function staffOrderActions(order) {
 function customerOrderActions(order) {
   switch (order.status) {
     case 'pending':   return statusButton(order, 'cancelled', 'Batalkan pesanan', 'danger');
-    case 'shipped':   return statusButton(order, 'completed', 'Pesanan sudah diterima', 'primary');
+    case 'shipped':   return order.cod ? '' : statusButton(order, 'completed', 'Pesanan sudah diterima', 'primary');
     case 'completed':
     case 'cancelled': return `<button class="btn sm primary" data-act="reorder" data-id="${order.id}">Beli lagi</button>`;
     default:          return '';

@@ -1508,7 +1508,9 @@ def staff_next_statuses(order):
 def check_status_change(user, order, new_status):
     current_status = order["status"]
     if user["role"] == "user":
-        if (current_status, new_status) not in USER_TRANSITIONS:
+        # COD: hanya toko yang boleh menyelesaikan, karena penerimaan uang tunai dikonfirmasi toko
+        cod_done = order.get("cod") and (current_status, new_status) == ("shipped", "completed")
+        if (current_status, new_status) not in USER_TRANSITIONS or cod_done:
             raise ApiError("Anda tidak dapat mengubah pesanan ke status tersebut", 403)
     elif new_status not in staff_next_statuses(order):
         raise ApiError(f"Status tidak bisa berubah dari '{current_status}' ke '{new_status}'", 422)
