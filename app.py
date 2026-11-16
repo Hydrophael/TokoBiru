@@ -562,8 +562,8 @@ def public_user(user):
         out["photo"] = f"/api/auth/avatar?v={int(user['image_v'])}"
     if user["role"] == "user":
         out["addresses"] = [address_json(item) for item in user.get("addresses", [])]
-    elif PUSH_ENABLED and user["role"] in STAFF_ROLES:
-        out["push_key"] = VAPID_PUBLIC_KEY
+    if PUSH_ENABLED:
+        out["push_key"] = VAPID_PUBLIC_KEY   # admin, master, dan pelanggan boleh berlangganan notifikasi
     return out
 
 
@@ -799,13 +799,21 @@ VAPID_PUBLIC_KEY = _env_str("VAPID_PUBLIC_KEY")
 VAPID_PRIVATE_KEY = _env_str("VAPID_PRIVATE_KEY")
 
 
+# Bentuk yang diterima layanan push: mailto:nama@domain.com atau alamat https://
+_SUBJECT_OK = re.compile(r"^mailto:[^@\s]+@[^@\s]+\.[^@\s]+$|^https://\S+$", re.I)
+
+
 def _vapid_subject():
-    explicit = _env_str("VAPID_SUBJECT")
-    if explicit:
+    explicit = _env_str("VAPID_SUBJECT").strip("'\" ")
+    if explicit and "@" in explicit and not explicit.lower().startswith(("mailto:", "http")):
+        explicit = "mailto:" + explicit   # email tanpa awalan: lengkapi otomatis
+    if explicit and _SUBJECT_OK.match(explicit):
         return explicit
+    if explicit:
+        app.logger.warning("VAPID_SUBJECT tidak valid (%r), dipakai nilai cadangan. Isi dengan mailto:emailanda@gmail.com", explicit)
     if PUBLIC_URL.startswith("https://"):
         return PUBLIC_URL
-    return "mailto:" + (SMTP_USER if "@" in SMTP_USER else "admin@example.com")
+    return "mailto:" + (SMTP_USER if _SUBJECT_OK.match("mailto:" + SMTP_USER) else "admin@example.com")
 
 
 VAPID_SUBJECT = _vapid_subject()
@@ -886,8 +894,28 @@ def push_staff(title, body, tag, view="orders"):
         app.logger.warning("Push ke staf gagal: %s", exc)
 
 
+def push_user(user_id, title, body, tag, view="orders"):
+    """Beri kabar ke semua perangkat satu akun (mis. pelanggan pemilik pesanan). Tidak pernah menggagalkan alur pesanan."""
+    if not PUSH_ENABLED:
+        return
+    try:
+        db = get_db()
+        subs = list(db.push_subs.find({"user_id": user_id}).limit(PUSH_MAX_DEVICES_PER_USER))
+        deliver_push(db, subs, push_message(title, body, tag, view))
+    except Exception as exc:
+        app.logger.warning("Push ke pengguna gagal: %s", exc)
+
+
+# Kabar untuk pelanggan: status -> (judul, isi)
+CUSTOMER_PUSH = {
+    "paid": lambda code: ("Pembayaran diterima", f"Pesanan {code} sudah dibayar dan sedang disiapkan."),
+    "shipped": lambda code: ("Pesanan dikirim", f"Pesanan {code} sedang diantar. Mohon siap menerima."),
+    "cancelled": lambda code: ("Pesanan dibatalkan", f"Pesanan {code} dibatalkan oleh toko. Hubungi toko bila ada pertanyaan."),
+}
+
+
 @app.post("/api/push/subscribe")
-@roles_required(*STAFF_ROLES)
+@login_required
 def push_subscribe():
     require_push_enabled()
     sub = json_body().get("subscription")
@@ -920,7 +948,7 @@ def push_unsubscribe():
 
 
 @app.post("/api/push/test")
-@roles_required(*STAFF_ROLES)
+@login_required
 def push_test():
     require_push_enabled()
     db = get_db()
@@ -1953,6 +1981,10 @@ def orders_status(order_id):
     if new_status == "cancelled":
         release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
     audit("pesanan_status", f"{order['code']}: {current_status} → {new_status}")
+    # Pelanggan dikabari hanya bila yang mengubah status adalah staf toko (bukan dirinya sendiri)
+    if user["role"] != "user" and new_status in CUSTOMER_PUSH:
+        title, body = CUSTOMER_PUSH[new_status](order["code"])
+        push_user(order["user_id"], title, body, f"my-{order['code']}-{new_status}")
     return jsonify({"order": order_json(db.orders.find_one({"_id": target_id}), user)})
 
 
@@ -1971,6 +2003,8 @@ def mark_order_paid(db, order, via, actor=None):
     audit("pesanan_status", f"{order['code']}: pending → paid", actor)
     push_staff("Pembayaran masuk", f"{order['code']} · {format_rupiah(order['total'])} sudah dibayar. Siap diproses.",
                f"order-{order['code']}-bayar")
+    title, body = CUSTOMER_PUSH["paid"](order["code"])
+    push_user(order["user_id"], title, body, f"my-{order['code']}-paid")
     return True
 
 

@@ -2,16 +2,18 @@
 // Browser menyimpan "langganan" ke layanan push-nya, server menyimpan langganan itu, lalu mengirim kabar
 // (pesanan baru, pembayaran masuk, masalah pembayaran) walau aplikasi sedang tertutup. Service worker (sw.js) yang menampilkannya.
 
-import { $, api, createError, isStaff, state, storage } from './core.js';
+import { $, api, createError, isCustomer, state, storage } from './core.js';
 import { toast } from './ui.js';
 
-const flagKey = () => 'tb_push_' + state.user?.id;   // hanya akun yang mengaktifkannya yang didaftarkan ulang di perangkat ini
+// true = aktif, false = dimatikan sendiri oleh pengguna, kosong = belum memutuskan
+const flagKey = () => 'tb_push_' + state.user?.id;
+const askedKey = () => 'tb_push_asked_' + state.user?.id;   // tawaran aktivasi hanya ditampilkan sekali per akun
 
 const supported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 const isIos = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const isInstalled = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
-export const pushAvailable = () => isStaff() && Boolean(state.user?.push_key);
+export const pushAvailable = () => Boolean(state.user?.push_key);
 
 function keyBytes(base64Url) {
   const padded = (base64Url + '='.repeat((4 - base64Url.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
@@ -75,8 +77,30 @@ export async function enablePush() {
   storage.set(flagKey(), true);
 }
 
+// Aktif secara bawaan: bila izin browser sudah diberikan, langsung didaftarkan tanpa bertanya. Bila belum,
+// ditawarkan sekali lewat tombol "Aktifkan" (browser mewajibkan ketukan pengguna untuk meminta izin).
+// Pilihan "dimatikan" dari Pengaturan selalu dihormati.
+export async function offerPush(ask = false) {
+  if (!pushAvailable() || !supported()) return;
+  if (storage.get(flagKey()) !== null) return;
+  if (Notification.permission === 'granted') {
+    try { await subscribe(); storage.set(flagKey(), true); } catch { /* gagal diam-diam: bisa diaktifkan dari Pengaturan */ }
+    return;
+  }
+  if (!ask || Notification.permission !== 'default' || storage.get(askedKey())) return;
+  storage.set(askedKey(), true);
+  const message = isCustomer() ? 'Mau dikabari saat pesananmu dibayar dan dikirim?' : 'Aktifkan notifikasi pesanan baru di perangkat ini?';
+  toast(message, '', {
+    label: 'Aktifkan',
+    fn: async () => {
+      try { await enablePush(); toast('Notifikasi aktif di perangkat ini', 'ok'); } catch (err) { toast(err.message, 'err'); }
+      renderPushRow();
+    }
+  });
+}
+
 export async function disablePush() {
-  storage.remove(flagKey());
+  storage.set(flagKey(), false);
   const subscription = await currentSubscription();
   if (!subscription) return;
   await api('/push/unsubscribe', { method: 'POST', body: { endpoint: subscription.endpoint } }).catch(() => { });
@@ -110,6 +134,7 @@ const HINT = {
   'need-install': 'Di iPhone, pasang dulu TokoBiru: ketuk Bagikan, lalu Tambah ke Layar Utama. Buka dari ikonnya.',
   denied: 'Notifikasi diblokir di pengaturan browser. Izinkan dulu di sana, lalu muat ulang.',
   off: 'Dapat kabar pesanan baru dan pembayaran masuk, walau aplikasi tertutup.',
+  'off-customer': 'Dapat kabar saat pesananmu dibayar, dikirim, atau dibatalkan, walau aplikasi tertutup.',
   on: 'Aktif di perangkat ini.'
 };
 
@@ -120,7 +145,7 @@ export async function renderPushRow() {
   if (!toggle.isConnected) return;
   toggle.setAttribute('aria-checked', String(status === 'on'));
   toggle.disabled = !['on', 'off'].includes(status);
-  $('#push-hint').textContent = HINT[status];
+  $('#push-hint').textContent = HINT[status === 'off' && isCustomer() ? 'off-customer' : status];
   $('[data-act="push-test"]').hidden = status !== 'on';
 }
 

@@ -52,7 +52,7 @@ import {
 } from './ui.js';
 import { choosePhoto, clearPhoto, compressImage, handlePhotoInput } from './photo.js';
 import './layout.js';
-import { detachPush, resumePush, testPush, togglePush } from './push.js';
+import { detachPush, offerPush, resumePush, testPush, togglePush } from './push.js';
 import { applySettings, installApp, loadSettings, setTextSize, setTheme, settingsModal, syncInstall, toggleSetting } from './settings.js';
 import { applyLogFilter, visibleLogIds } from './logs-grid.js';
 import { applyProductFilter } from './products-grid.js';
@@ -139,7 +139,8 @@ async function startSession(user, view) {
   state.user = user;
   state.cart = storage.get(STORAGE_KEYS.cart(user.id)) || {};
   await migrateLocalAddress();
-  if (isStaff()) resumePush();
+  resumePush();
+  offerPush(isStaff());   // staf ditawari saat masuk; pelanggan ditawari setelah pesanan pertama
   await show(view || defaultView());
 }
 
@@ -1422,6 +1423,7 @@ const formHandlers = {
     closeModal();
     await show('orders');
     showOrderSuccess(result.order);
+    offerPush(true);
   }
 };
 
@@ -1704,7 +1706,7 @@ async function boot() {
   setInterval(tickTimers, 1000);
   // Notifikasi diketuk saat aplikasi sudah terbuka: pindah ke layar yang diminta
   navigator.serviceWorker?.addEventListener('message', event => {
-    if (event.data?.type === 'open-view' && state.user && isStaff()) show(event.data.view);
+    if (event.data?.type === 'open-view' && state.user) show(event.data.view);
   });
 
   try {
