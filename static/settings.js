@@ -3,6 +3,7 @@
 
 import { $, $$, STORAGE_KEYS, isCustomer, state, storage } from './core.js';
 import { openModal, toast } from './ui.js';
+import { pushRowHtml, renderPushRow } from './push.js';
 
 const DEFAULTS = { text: 'md', calm: false, haptic: true, theme: 'light' };
 
@@ -89,8 +90,10 @@ export function settingsModal() {
         ${segment('Ukuran teks', 'set-text', 'data-v', sizesFor(), settings.text)}</div>
       ${switchRow('calm', 'Kurangi animasi', 'Matikan gerakan dan efek terbang ke keranjang.')}
       ${haptic}
+      ${pushRowHtml()}
     </div>
     <div class="foot"><button type="button" class="btn primary" data-act="close-modal">Selesai</button></div>`);
+  renderPushRow();
 }
 
 export function setTextSize(el) {

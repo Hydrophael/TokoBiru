@@ -31,6 +31,9 @@ Environment variable
     SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD / SMTP_FROM
                   opsional: server email untuk kode reset password (port 587 STARTTLS, atau 465 SSL).
                   Tanpa SMTP_HOST dan pengirim (SMTP_FROM atau SMTP_USER), tombol "Lupa password" tidak tampil.
+    VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT
+                  opsional: notifikasi push pesanan untuk admin/master (butuh paket pywebpush).
+                  Buat kuncinya dengan: python app.py gen-vapid. VAPID_SUBJECT berisi mailto:emailanda@contoh.com
     Variabel yang dibiarkan kosong diperlakukan sama seperti tidak diisi (memakai nilai bawaan).
 """
 import base64
@@ -48,11 +51,13 @@ import time
 import unicodedata
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import make_msgid
 from functools import wraps
 from html import escape as html_escape
+from urllib.parse import urlsplit
 
 from bson import ObjectId
 from flask import (Flask, Response, g, has_request_context, jsonify, request,
@@ -254,6 +259,7 @@ def ensure_indexes(db):
     db.logs.create_index([("ts", DESCENDING)])
     db.logs.create_index([("ts", ASCENDING)], expireAfterSeconds=LOG_RETENTION_DAYS * 86400, name="logs_ttl")
     db.rate_limits.create_index([("expires", ASCENDING)], expireAfterSeconds=0, name="rate_ttl")
+    db.push_subs.create_index([("user_id", ASCENDING)])
 
 
 def get_db():
@@ -556,6 +562,8 @@ def public_user(user):
         out["photo"] = f"/api/auth/avatar?v={int(user['image_v'])}"
     if user["role"] == "user":
         out["addresses"] = [address_json(item) for item in user.get("addresses", [])]
+    elif PUSH_ENABLED and user["role"] in STAFF_ROLES:
+        out["push_key"] = VAPID_PUBLIC_KEY
     return out
 
 
@@ -778,6 +786,152 @@ def secure_headers(resp):
     elif request.path.startswith("/static/"):
         resp.headers["Cache-Control"] = "no-cache"
     return resp
+
+
+# --- Notifikasi push (Web Push) untuk admin/master ---
+try:
+    from pywebpush import WebPushException, webpush
+except ImportError:  # pywebpush belum terpasang: fitur mati, aplikasi tetap jalan
+    webpush = None
+    WebPushException = Exception  # type: ignore[misc,assignment]
+
+VAPID_PUBLIC_KEY = _env_str("VAPID_PUBLIC_KEY")
+VAPID_PRIVATE_KEY = _env_str("VAPID_PRIVATE_KEY")
+
+
+def _vapid_subject():
+    explicit = _env_str("VAPID_SUBJECT")
+    if explicit:
+        return explicit
+    if PUBLIC_URL.startswith("https://"):
+        return PUBLIC_URL
+    return "mailto:" + (SMTP_USER if "@" in SMTP_USER else "admin@example.com")
+
+
+VAPID_SUBJECT = _vapid_subject()
+PUSH_ENABLED = bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY and webpush)
+PUSH_MAX_DEVICES_PER_USER = 5
+PUSH_MAX_SUBS = 40
+PUSH_TIMEOUT = 3
+# Server hanya boleh menghubungi layanan push milik browser, supaya alamat buatan pengguna tidak bisa dipakai menyerang jaringan dalam
+PUSH_HOST_SUFFIXES = ("googleapis.com", "push.services.mozilla.com", "push.apple.com", "notify.windows.com")
+PUSH_KEY_RE = re.compile(r"[A-Za-z0-9_\-]{8,200}={0,2}")
+PAYMENT_NAME = {"transfer": "Transfer", "cash": "Bayar di tempat", "qris": "QRIS",
+                "ewallet_dana": "DANA", "ewallet_shopeepay": "ShopeePay", "ewallet_ovo": "OVO"}
+
+
+def require_push_enabled():
+    if not PUSH_ENABLED:
+        raise ApiError("Notifikasi belum diaktifkan di toko ini.", 503)
+
+
+def push_endpoint_ok(endpoint):
+    if not isinstance(endpoint, str) or len(endpoint) > 700:
+        return False
+    try:
+        parts = urlsplit(endpoint)
+        host = parts.hostname or ""
+        port = parts.port
+    except ValueError:
+        return False
+    return (parts.scheme == "https" and not parts.username and port in (None, 443)
+            and any(host == suffix or host.endswith("." + suffix) for suffix in PUSH_HOST_SUFFIXES))
+
+
+def push_message(title, body, tag, view="orders"):
+    return json.dumps({"title": title, "body": body, "tag": tag, "url": f"/?buka={view}"})
+
+
+def _push_one(sub, payload):
+    """True = terkirim, False = perangkat sudah tidak berlangganan (hapus), None = gagal sementara."""
+    if webpush is None:
+        return None
+    try:
+        webpush(subscription_info={"endpoint": sub["endpoint"], "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]}},
+                data=payload, vapid_private_key=VAPID_PRIVATE_KEY, vapid_claims={"sub": VAPID_SUBJECT},
+                ttl=3600, timeout=PUSH_TIMEOUT)
+        return True
+    except WebPushException as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status in (404, 410):
+            return False
+        app.logger.warning("Push gagal (HTTP %s): %s", status, str(exc)[:200])
+    except Exception as exc:
+        app.logger.warning("Push gagal: %s", str(exc)[:200])
+    return None
+
+
+def deliver_push(db, subs, payload):
+    """Kirim ke semua perangkat di `subs`; perangkat yang sudah tidak berlangganan dihapus. Mengembalikan jumlah terkirim."""
+    if not subs:
+        return 0
+    with ThreadPoolExecutor(max_workers=min(8, len(subs))) as pool:
+        results = list(pool.map(lambda sub: _push_one(sub, payload), subs))
+    gone = [sub["_id"] for sub, ok in zip(subs, results) if ok is False]
+    if gone:
+        db.push_subs.delete_many({"_id": {"$in": gone}})
+    return sum(1 for ok in results if ok)
+
+
+def push_staff(title, body, tag, view="orders"):
+    """Beri kabar ke semua perangkat admin/master yang aktif. Tidak pernah menggagalkan alur pesanan."""
+    if not PUSH_ENABLED:
+        return
+    try:
+        db = get_db()
+        staff = [u["_id"] for u in db.users.find({"role": {"$in": list(STAFF_ROLES)}, "active": {"$ne": False}}, {"_id": 1})]
+        subs = list(db.push_subs.find({"user_id": {"$in": staff}}).limit(PUSH_MAX_SUBS))
+        deliver_push(db, subs, push_message(title, body, tag, view))
+    except Exception as exc:
+        app.logger.warning("Push ke staf gagal: %s", exc)
+
+
+@app.post("/api/push/subscribe")
+@roles_required(*STAFF_ROLES)
+def push_subscribe():
+    require_push_enabled()
+    sub = json_body().get("subscription")
+    keys = sub.get("keys") if isinstance(sub, dict) else None
+    keys = keys if isinstance(keys, dict) else {}
+    endpoint, p256dh, auth = (sub or {}).get("endpoint") if isinstance(sub, dict) else None, keys.get("p256dh"), keys.get("auth")
+    if not isinstance(endpoint, str) or not push_endpoint_ok(endpoint) or not all(isinstance(k, str) and PUSH_KEY_RE.fullmatch(k) for k in (p256dh, auth)):
+        raise ApiError("Langganan notifikasi tidak valid", 422)
+    db = get_db()
+    user = current_user()
+    sub_id = hashlib.sha256(endpoint.encode()).hexdigest()
+    # Satu perangkat milik satu akun: bila akun lain masuk di perangkat yang sama, kepemilikannya berpindah
+    db.push_subs.replace_one({"_id": sub_id}, {"_id": sub_id, "user_id": user["_id"], "endpoint": endpoint,
+                                               "p256dh": p256dh, "auth": auth, "created_at": utcnow()}, upsert=True)
+    mine = list(db.push_subs.find({"user_id": user["_id"]}, {"_id": 1}).sort("created_at", -1))
+    if len(mine) > PUSH_MAX_DEVICES_PER_USER:
+        db.push_subs.delete_many({"_id": {"$in": [doc["_id"] for doc in mine[PUSH_MAX_DEVICES_PER_USER:]]}})
+    audit("push_aktif", "notifikasi diaktifkan di satu perangkat")
+    return jsonify({"ok": True})
+
+
+@app.post("/api/push/unsubscribe")
+@login_required
+def push_unsubscribe():
+    endpoint = json_body().get("endpoint")
+    if isinstance(endpoint, str) and len(endpoint) <= 700:
+        sub_id = hashlib.sha256(endpoint.encode()).hexdigest()
+        get_db().push_subs.delete_one({"_id": sub_id, "user_id": current_user()["_id"]})
+    return jsonify({"ok": True})
+
+
+@app.post("/api/push/test")
+@roles_required(*STAFF_ROLES)
+def push_test():
+    require_push_enabled()
+    db = get_db()
+    user = current_user()
+    if _hit(f"pt:{user['_id']}", 60) > 5:
+        raise ApiError("Terlalu sering. Coba lagi sebentar lagi.", 429)
+    subs = list(db.push_subs.find({"user_id": user["_id"]}))
+    if not subs:
+        raise ApiError("Perangkat ini belum terdaftar. Aktifkan notifikasi dulu.", 404)
+    sent = deliver_push(db, subs, push_message("Notifikasi uji", "Berhasil! Kabar pesanan akan muncul seperti ini.", "test"))
+    return jsonify({"sent": sent})
 
 
 DUMMY_HASH = generate_password_hash(secrets.token_hex(8))
@@ -1766,6 +1920,8 @@ def orders_create():
         db.orders.update_one({"_id": order["_id"]}, {"$set": {"ewallet_id": charge_id, "ewallet_url": charge_url}})
         order.update(ewallet_id=charge_id, ewallet_url=charge_url)
     audit("pesanan_buat", f"{order['code']} total {order['total']}")
+    push_staff("Pesanan baru", f"{order['code']} · {format_rupiah(order['total'])} · "
+                               f"{PAYMENT_NAME.get(order['payment_method'], 'Pesanan')}", f"order-{order['code']}-baru")
     return jsonify({"order": order_json(order, user)}), 201
 
 
@@ -1813,6 +1969,8 @@ def mark_order_paid(db, order, via, actor=None):
     if result.modified_count != 1:
         return False
     audit("pesanan_status", f"{order['code']}: pending → paid", actor)
+    push_staff("Pembayaran masuk", f"{order['code']} · {format_rupiah(order['total'])} sudah dibayar. Siap diproses.",
+               f"order-{order['code']}-bayar")
     return True
 
 
@@ -1883,6 +2041,8 @@ def order_proof_upload(order_id):
                                 {"_id": order["_id"], "image": data, "type": mime, "uploaded_at": now}, upsert=True)
     db.orders.update_one({"_id": order["_id"], "status": "pending"}, {"$set": {"proof_at": now, "updated_at": now}})
     audit("bukti_transfer", order["code"])
+    push_staff("Bukti transfer masuk", f"{order['code']} · {format_rupiah(order['total'])}. Cek dan tandai dibayar.",
+               f"order-{order['code']}-bukti")
     return jsonify({"order": order_json(db.orders.find_one({"_id": order["_id"]}), user)})
 
 
@@ -2016,6 +2176,8 @@ def xendit_webhook():
     if not amount_ok or not qr_ok:
         db.orders.update_one({"_id": order["_id"]}, {"$set": {"payment_issue": "mismatch", "updated_at": utcnow()}})
         audit("pembayaran_tidak_cocok", f"{order['code']} nominal {amount} vs {order['total']}", XENDIT_ACTOR)
+        push_staff("Pembayaran tidak cocok", f"{order['code']}: nominal yang masuk berbeda. Perlu dicek.",
+                   f"order-{order['code']}-masalah")
         return jsonify({"ok": True, "ignored": True}), 200
 
     if order["status"] == "pending":
@@ -2024,6 +2186,8 @@ def xendit_webhook():
         # Uang masuk setelah pesanan dibatalkan/kedaluwarsa: stok sudah dilepas, jadi ditandai untuk refund manual
         db.orders.update_one({"_id": order["_id"]}, {"$set": {"needs_refund": True, "updated_at": utcnow()}})
         audit("pembayaran_terlambat", f"{order['code']} dibayar setelah dibatalkan, perlu refund", XENDIT_ACTOR)
+        push_staff("Perlu refund", f"{order['code']} dibayar setelah dibatalkan. Kembalikan uang pelanggan.",
+                   f"order-{order['code']}-refund")
     return jsonify({"ok": True})
 
 
@@ -2280,6 +2444,22 @@ def create_master_cli():
     print(f"Akun master '{clean['username']}' dibuat.")
 
 
+def gen_vapid_cli():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    key = ec.generate_private_key(ec.SECP256R1())
+
+    def b64(raw):
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    private = b64(key.private_numbers().private_value.to_bytes(32, "big"))
+    public = b64(key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint))
+    print("Salin ke Environment Variables (Vercel) atau .env. Jaga kunci privat, jangan dibagikan.\n")
+    print(f"VAPID_PUBLIC_KEY={public}")
+    print(f"VAPID_PRIVATE_KEY={private}")
+    print("VAPID_SUBJECT=mailto:emailanda@contoh.com")
+
+
 DEMO_PASSWORD = "demo12345"
 DEMO_USERS = (
     ("Master Demo", "master_demo", "master", "master"),
@@ -2335,6 +2515,8 @@ if __name__ == "__main__":
         create_master_cli()
     elif len(sys.argv) > 1 and sys.argv[1] == "seed-demo":
         seed_demo_cli()
+    elif len(sys.argv) > 1 and sys.argv[1] == "gen-vapid":
+        gen_vapid_cli()
     else:
         app.run(host="127.0.0.1", port=int(os.environ.get("PORT", 5000)),
                 debug=os.environ.get("FLASK_DEBUG") == "1")

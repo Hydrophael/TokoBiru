@@ -23,6 +23,7 @@ import {
   hooks,
   icon,
   isCustomer,
+  isStaff,
   newRequestKey,
   paymentChoices,
   priceHtml,
@@ -51,6 +52,7 @@ import {
 } from './ui.js';
 import { choosePhoto, clearPhoto, compressImage, handlePhotoInput } from './photo.js';
 import './layout.js';
+import { detachPush, resumePush, testPush, togglePush } from './push.js';
 import { applySettings, installApp, loadSettings, setTextSize, setTheme, settingsModal, syncInstall, toggleSetting } from './settings.js';
 import { applyLogFilter, visibleLogIds } from './logs-grid.js';
 import { applyProductFilter } from './products-grid.js';
@@ -109,6 +111,7 @@ let searchSeq = 0;
 let logSearchTimer = 0;
 let resendTimer = null;
 let otpTimer = null;
+let pendingOpenView = '';   // layar yang diminta notifikasi, menunggu admin masuk
 let pendingPayReturn = null;   // hasil bayar e-wallet yang menunggu pelanggan masuk
 
 
@@ -132,16 +135,19 @@ hooks.onSessionExpired = () => {
   api('/auth/me').then(me => { state.csrf = me.csrf; }).catch(() => { });
 };
 
-async function startSession(user) {
+async function startSession(user, view) {
   state.user = user;
   state.cart = storage.get(STORAGE_KEYS.cart(user.id)) || {};
   await migrateLocalAddress();
-  await show(defaultView());
+  if (isStaff()) resumePush();
+  await show(view || defaultView());
 }
 
 async function onAuthed(result) {
   state.csrf = result.csrf;
-  await startSession(result.user);
+  const openView = pendingOpenView;
+  pendingOpenView = '';
+  await startSession(result.user, openView);
   if (pendingPayReturn) {
     const payResult = pendingPayReturn;
     pendingPayReturn = null;
@@ -171,6 +177,7 @@ async function migrateLocalAddress() {
 
 async function logout() {
   setProfileMenu(false);
+  await detachPush();
   try {
     const result = await api('/auth/logout', { method: 'POST', body: {} });
     state.csrf = result.csrf;
@@ -1159,6 +1166,8 @@ const actions = {
   'set-theme': setTheme,
   'set-toggle': toggleSetting,
   'install-app': installApp,
+  'push-toggle': togglePush,
+  'push-test': testPush,
 
   'toggle-pw': togglePasswordVisibility,
   'forgot-open': () => forgotModal(loginEmailHint()),
@@ -1648,6 +1657,14 @@ function bindEvents() {
 }
 
 // Pelanggan kembali dari e-wallet lewat /?bayar=ok atau /?bayar=gagal: buka daftar pesanan dan beri kabar
+// Notifikasi pesanan membuka aplikasi lewat /?buka=orders (atau dashboard)
+function takeOpenView() {
+  const view = new URLSearchParams(location.search).get('buka');
+  if (!view) return '';
+  history.replaceState(null, '', location.pathname);
+  return view === 'orders' || view === 'dashboard' ? view : '';
+}
+
 function takePayReturn() {
   const result = new URLSearchParams(location.search).get('bayar');
   if (!result) return '';
@@ -1685,6 +1702,10 @@ async function boot() {
   document.addEventListener('visibilitychange', () => { if (!document.hidden) pollQris(); });
   addEventListener('pageshow', () => pollQris());
   setInterval(tickTimers, 1000);
+  // Notifikasi diketuk saat aplikasi sudah terbuka: pindah ke layar yang diminta
+  navigator.serviceWorker?.addEventListener('message', event => {
+    if (event.data?.type === 'open-view' && state.user && isStaff()) show(event.data.view);
+  });
 
   try {
     const me = await api('/auth/me');
@@ -1699,8 +1720,10 @@ async function boot() {
     state.resetEnabled = Boolean(me.reset_enabled);
 
     const payReturn = takePayReturn();
-    if (me.user) { await startSession(me.user); await handlePayReturn(payReturn); }
+    const openView = takeOpenView();
+    if (me.user) { await startSession(me.user, openView); await handlePayReturn(payReturn); }
     else {
+      pendingOpenView = openView;
       renderAuth('login');
       if (payReturn) {
         pendingPayReturn = payReturn;
