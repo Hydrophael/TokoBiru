@@ -109,6 +109,7 @@ let searchSeq = 0;
 let logSearchTimer = 0;
 let resendTimer = null;
 let otpTimer = null;
+let pendingPayReturn = null;   // hasil bayar e-wallet yang menunggu pelanggan masuk
 
 
 const emptyFilters = () => ({ inStock: false, min: null, max: null });
@@ -141,6 +142,11 @@ async function startSession(user) {
 async function onAuthed(result) {
   state.csrf = result.csrf;
   await startSession(result.user);
+  if (pendingPayReturn) {
+    const payResult = pendingPayReturn;
+    pendingPayReturn = null;
+    await handlePayReturn(payResult);
+  }
 }
 
 async function migrateLocalAddress() {
@@ -1642,11 +1648,15 @@ function bindEvents() {
 }
 
 // Pelanggan kembali dari e-wallet lewat /?bayar=ok atau /?bayar=gagal: buka daftar pesanan dan beri kabar
-async function handlePayReturn() {
+function takePayReturn() {
   const result = new URLSearchParams(location.search).get('bayar');
-  if (!result) return;
+  if (!result) return '';
   history.replaceState(null, '', location.pathname);
-  if (!isCustomer()) return;
+  return result === 'ok' || result === 'gagal' ? result : '';
+}
+
+async function handlePayReturn(result) {
+  if (!result || !isCustomer()) return;
   await show('orders');
   if (result === 'ok') {
     toast('Terima kasih! Pembayaran sedang dicek, status pesanan berubah otomatis.', 'ok');
@@ -1688,8 +1698,15 @@ async function boot() {
     state.shipping = { fee: Number(me.shipping?.fee) || 0, freeMin: Number(me.shipping?.free_min) || 0 };
     state.resetEnabled = Boolean(me.reset_enabled);
 
-    if (me.user) { await startSession(me.user); await handlePayReturn(); }
-    else renderAuth('login');
+    const payReturn = takePayReturn();
+    if (me.user) { await startSession(me.user); await handlePayReturn(payReturn); }
+    else {
+      renderAuth('login');
+      if (payReturn) {
+        pendingPayReturn = payReturn;
+        toast('Masuk untuk melihat status pembayaran Anda.', 'ok');
+      }
+    }
   } catch (err) {
     $('#app').innerHTML = `<div class="empty" style="margin:15vh auto;max-width:460px"><b>Aplikasi belum bisa dimuat</b><p>${escapeHtml(err.message)}</p><button class="btn primary" data-act="refresh-page">Muat ulang</button></div>`;
   }

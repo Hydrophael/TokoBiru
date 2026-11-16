@@ -104,7 +104,7 @@ export function ewalletBoxHtml(order) {
 }
 
 const cashNoteHtml = order =>
-  `<div class="r-note">Siapkan uang tunai <b>${formatRupiah(order.total)}</b> ${order.shipping_method === 'pickup' ? 'saat mengambil pesanan di toko' : 'saat pesanan diterima'}. Kode pesanan: <b>${escapeHtml(order.code)}</b>.</div>`;
+  `<div class="r-note">Siapkan uang tunai <b>${formatRupiah(order.total)}</b> ${order.shipping_method === 'pickup' ? 'saat mengambil pesanan di toko' : 'saat pesanan diterima'}. Kode pesanan: <b>${escapeHtml(order.code)}</b>.${order.status === 'pending' && order.expires_at ? ` Pesanan dibatalkan otomatis bila belum diproses sebelum <b>${formatDate(order.expires_at)}</b>.` : ''}</div>`;
 
 export function showOrderSuccess(order) {
   if (!order) return;

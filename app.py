@@ -1400,7 +1400,7 @@ def sweep_expired_orders(db, force=False):
         now = utcnow()
         cutoff = now - timedelta(hours=PENDING_TTL_HOURS)
         # Batas bayar tiap pesanan ada di expires_at; created_at hanya cadangan untuk data lama
-        stale = list(db.orders.find({"status": "pending", "payment_method": {"$ne": "cash"},
+        stale = list(db.orders.find({"status": "pending",
                                      "$or": [{"expires_at": {"$lte": now}},
                                              {"expires_at": {"$exists": False}, "created_at": {"$lt": cutoff}}]}
                                     ).limit(EXPIRE_BATCH))
@@ -1655,7 +1655,8 @@ def orders_create():
             order["expires_at"] = now + timedelta(minutes=QRIS_TTL_MINUTES)
         elif clean["payment_method"] in EWALLET_CHANNELS:
             order["expires_at"] = now + timedelta(minutes=EWALLET_TTL_MINUTES[clean["payment_method"]])
-        elif clean["payment_method"] != "cash":
+        else:
+            # transfer dan tunai: batas PENDING_TTL_HOURS; tanpa batas, pesanan tunai yang ditinggalkan menahan stok selamanya
             order["expires_at"] = now + timedelta(hours=PENDING_TTL_HOURS)
         if key:
             order["idem_key"] = key
@@ -1712,7 +1713,7 @@ def orders_status(order_id):
         raise ApiError("Status pesanan sudah berubah. Muat ulang data.", 409)
     if new_status == "cancelled":
         release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
-    audit("pesanan_status", f"{order['code']}: {current_status} -> {new_status}")
+    audit("pesanan_status", f"{order['code']}: {current_status} → {new_status}")
     return jsonify({"order": order_json(db.orders.find_one({"_id": target_id}), user)})
 
 
@@ -1728,7 +1729,7 @@ def mark_order_paid(db, order, via, actor=None):
         {"$set": {"status": "paid", "paid_at": now, "paid_via": via, "updated_at": now}})
     if result.modified_count != 1:
         return False
-    audit("pesanan_status", f"{order['code']}: pending -> paid", actor)
+    audit("pesanan_status", f"{order['code']}: pending → paid", actor)
     return True
 
 

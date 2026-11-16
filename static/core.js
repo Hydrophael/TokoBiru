@@ -49,7 +49,10 @@ const plainChanges = text => text.replace(/\{([^{}]*)\}/g, (_, body) => body.spl
 export function detailLabel(log) {
   let text = plainChanges(String(log.detail ?? ''));
   if (log.action === 'pesanan_status') {
-    text = text.replace(/\b(pending|paid|shipped|completed|cancelled)\b/g, key => STATUS[key][0]).replace(' -> ', ' → ');
+    const key = '(pending|paid|shipped|completed|cancelled)';
+    // log lama tersimpan dengan "-" atau "->" karena ">" dulu dibuang sanitasi
+    text = text.replace(new RegExp(`\\b${key} (?:->|-|→) ${key}\\b`), '$1 → $2')
+      .replace(/\b(pending|paid|shipped|completed|cancelled)\b/g, word => STATUS[word][0]);
   }
   return capitalizeWords(text);
 }
