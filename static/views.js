@@ -50,6 +50,7 @@ import {
   msLeft,
 } from './core.js';
 import { qrSvg } from './qr.js';
+import { bellHtml, renderBell } from './notify.js';
 import { EASE, burst, linkLabels, openModal, reducedMotion, toast, tweenNumber } from './ui.js';
 import { AVATAR_HINT, PHOTO_HINT, avatarPreviewHtml, photoPreviewHtml } from './photo.js';
 import { actionTagHtml, actorHtml, logEmptyHtml, mountLogGrid, refreshLogGrid, visibleLogIds } from './logs-grid.js';
@@ -521,6 +522,7 @@ export function renderShell() {
     ${brandHtml()}
     <nav class="nav" aria-label="Menu utama"><span class="nav-ind" aria-hidden="true"></span>${navHtml(navItems)}</nav>
     <div class="top-r">
+      ${bellHtml()}
       ${customer ? `<button class="btn cart-btn" data-act="open-cart">${icon('cart')}<span class="hide-m">Keranjang</span><span class="cart-sum num" id="cart-sum" hidden></span><span class="count num" id="cart-count">0</span></button>` : ''}
       ${profileMenuHtml()}
     </div>
@@ -529,6 +531,7 @@ export function renderShell() {
   ${customer ? cartDrawerHtml() : ''}`;
 
   moveNavIndicator();
+  renderBell();
   if (customer) drawCart();
 }
 

@@ -32,7 +32,7 @@ Environment variable
                   opsional: server email untuk kode reset password (port 587 STARTTLS, atau 465 SSL).
                   Tanpa SMTP_HOST dan pengirim (SMTP_FROM atau SMTP_USER), tombol "Lupa password" tidak tampil.
     VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT
-                  opsional: notifikasi push pesanan untuk admin/master (butuh paket pywebpush).
+                  opsional: notifikasi push pesanan untuk staf dan pelanggan (butuh paket pywebpush).
                   Buat kuncinya dengan: python app.py gen-vapid. VAPID_SUBJECT berisi mailto:emailanda@contoh.com
     Variabel yang dibiarkan kosong diperlakukan sama seperti tidak diisi (memakai nilai bawaan).
 """
@@ -62,7 +62,7 @@ from urllib.parse import urlsplit
 from bson import ObjectId
 from flask import (Flask, Response, g, has_request_context, jsonify, request,
                    send_from_directory, session)
-from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
+from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument, UpdateOne
 from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -260,6 +260,8 @@ def ensure_indexes(db):
     db.logs.create_index([("ts", ASCENDING)], expireAfterSeconds=LOG_RETENTION_DAYS * 86400, name="logs_ttl")
     db.rate_limits.create_index([("expires", ASCENDING)], expireAfterSeconds=0, name="rate_ttl")
     db.push_subs.create_index([("user_id", ASCENDING)])
+    db.notifications.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
+    db.notifications.create_index([("created_at", ASCENDING)], expireAfterSeconds=30 * 86400, name="notif_ttl")
 
 
 def get_db():
@@ -788,7 +790,7 @@ def secure_headers(resp):
     return resp
 
 
-# --- Notifikasi push (Web Push) untuk admin/master ---
+# --- Notifikasi push (Web Push) untuk staf dan pelanggan ---
 try:
     from pywebpush import WebPushException, webpush
 except ImportError:  # pywebpush belum terpasang: fitur mati, aplikasi tetap jalan
@@ -819,7 +821,7 @@ def _vapid_subject():
 VAPID_SUBJECT = _vapid_subject()
 PUSH_ENABLED = bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY and webpush)
 PUSH_MAX_DEVICES_PER_USER = 5
-PUSH_MAX_SUBS = 40
+PUSH_MAX_SUBS = 200
 PUSH_TIMEOUT = 3
 # Server hanya boleh menghubungi layanan push milik browser, supaya alamat buatan pengguna tidak bisa dipakai menyerang jaringan dalam
 PUSH_HOST_SUFFIXES = ("googleapis.com", "push.services.mozilla.com", "push.apple.com", "notify.windows.com")
@@ -881,13 +883,26 @@ def deliver_push(db, subs, payload):
     return sum(1 for ok in results if ok)
 
 
-def push_staff(title, body, tag, view="orders"):
-    """Beri kabar ke semua perangkat admin/master yang aktif. Tidak pernah menggagalkan alur pesanan."""
-    if not PUSH_ENABLED:
+def record_notification(db, user_ids, title, body, tag, view="orders"):
+    """Simpan kabar ke pusat notifikasi di dalam aplikasi (lonceng di header). Kabar yang sama (akun + tag) tidak dobel."""
+    if not user_ids:
         return
+    now = utcnow()
+    db.notifications.bulk_write([
+        UpdateOne({"user_id": uid, "tag": tag},
+                  {"$setOnInsert": {"user_id": uid, "tag": tag, "title": title, "body": body, "view": view,
+                                    "read": False, "created_at": now}}, upsert=True)
+        for uid in user_ids], ordered=False)
+
+
+def push_staff(title, body, tag, view="orders"):
+    """Beri kabar ke semua staf (admin/master) di lonceng aplikasi dan, bila aktif, di perangkat mereka. Tidak pernah menggagalkan alur pesanan."""
     try:
         db = get_db()
         staff = [u["_id"] for u in db.users.find({"role": {"$in": list(STAFF_ROLES)}, "active": {"$ne": False}}, {"_id": 1})]
+        record_notification(db, staff, title, body, tag, view)
+        if not PUSH_ENABLED:
+            return
         subs = list(db.push_subs.find({"user_id": {"$in": staff}}).limit(PUSH_MAX_SUBS))
         deliver_push(db, subs, push_message(title, body, tag, view))
     except Exception as exc:
@@ -895,11 +910,12 @@ def push_staff(title, body, tag, view="orders"):
 
 
 def push_user(user_id, title, body, tag, view="orders"):
-    """Beri kabar ke semua perangkat satu akun (mis. pelanggan pemilik pesanan). Tidak pernah menggagalkan alur pesanan."""
-    if not PUSH_ENABLED:
-        return
+    """Beri kabar ke satu akun (mis. pelanggan pemilik pesanan): di lonceng aplikasi dan, bila aktif, di semua perangkatnya. Tidak pernah menggagalkan alur pesanan."""
     try:
         db = get_db()
+        record_notification(db, [user_id], title, body, tag, view)
+        if not PUSH_ENABLED:
+            return
         subs = list(db.push_subs.find({"user_id": user_id}).limit(PUSH_MAX_DEVICES_PER_USER))
         deliver_push(db, subs, push_message(title, body, tag, view))
     except Exception as exc:
@@ -947,19 +963,39 @@ def push_unsubscribe():
     return jsonify({"ok": True})
 
 
-@app.post("/api/push/test")
+def notification_json(doc):
+    return {"id": str(doc["_id"]), "title": doc.get("title", ""), "body": doc.get("body", ""),
+            "view": doc.get("view", "orders"), "read": bool(doc.get("read")),
+            "created_at": doc["created_at"].isoformat() + "Z"}
+
+
+@app.get("/api/notifications")
 @login_required
-def push_test():
-    require_push_enabled()
+def notifications_list():
     db = get_db()
-    user = current_user()
-    if _hit(f"pt:{user['_id']}", 60) > 5:
-        raise ApiError("Terlalu sering. Coba lagi sebentar lagi.", 429)
-    subs = list(db.push_subs.find({"user_id": user["_id"]}))
-    if not subs:
-        raise ApiError("Perangkat ini belum terdaftar. Aktifkan notifikasi dulu.", 404)
-    sent = deliver_push(db, subs, push_message("Notifikasi uji", "Berhasil! Kabar pesanan akan muncul seperti ini.", "test"))
-    return jsonify({"sent": sent})
+    uid = current_user()["_id"]
+    docs = list(db.notifications.find({"user_id": uid}).sort("created_at", -1).limit(30))
+    unread = db.notifications.count_documents({"user_id": uid, "read": False})
+    resp = jsonify({"items": [notification_json(doc) for doc in docs], "unread": unread})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.post("/api/notifications/read")
+@login_required
+def notifications_read():
+    body = json_body()
+    db = get_db()
+    uid = current_user()["_id"]
+    if body.get("all") is True:
+        db.notifications.update_many({"user_id": uid, "read": False}, {"$set": {"read": True}})
+    else:
+        ids = body.get("ids")
+        if not isinstance(ids, list) or not ids or len(ids) > 50:
+            raise ApiError("Daftar notifikasi tidak valid", 400)
+        db.notifications.update_many({"_id": {"$in": [object_id(item, "Notifikasi") for item in ids]}, "user_id": uid},
+                                     {"$set": {"read": True}})
+    return jsonify({"ok": True})
 
 
 DUMMY_HASH = generate_password_hash(secrets.token_hex(8))

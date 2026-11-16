@@ -6,12 +6,17 @@ export function toast(message, type = '', action) {
   const box = $('#toasts');
   const el = document.createElement('div');
   el.className = 'toast ' + type;
+  // Pembaca layar mengumumkan toast: kesalahan langsung, selebihnya menunggu giliran
+  el.setAttribute('role', type === 'err' ? 'alert' : 'status');
 
   const text = document.createElement('span');
   text.textContent = message;
   el.appendChild(text);
 
+  let timer = null;
   const dismiss = () => {
+    clearTimeout(timer);
+    if (el.classList.contains('out')) return;
     el.classList.add('out');
     setTimeout(() => el.remove(), 220);
   };
@@ -23,11 +28,29 @@ export function toast(message, type = '', action) {
     button.textContent = action.label;
     button.onclick = () => { action.fn(); dismiss(); };
     el.appendChild(button);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'toast-x';
+    close.setAttribute('aria-label', 'Tutup');
+    close.textContent = '×';
+    close.onclick = dismiss;
+    el.appendChild(close);
   }
 
   while (box.children.length >= MAX_TOASTS) box.firstChild.remove();
   box.appendChild(el);
-  setTimeout(dismiss, type === 'err' || action ? 6000 : 4000);
+
+  // Toast biasa hilang sendiri; yang punya tombol aksi diberi waktu jauh lebih lama.
+  // Waktu berhenti saat toast disorot kursor atau difokus, supaya sempat dibaca.
+  const duration = action ? 30000 : type === 'err' ? 6000 : 4000;
+  const arm = () => { clearTimeout(timer); timer = setTimeout(dismiss, duration); };
+  const hold = () => clearTimeout(timer);
+  el.addEventListener('pointerenter', hold);
+  el.addEventListener('pointerleave', arm);
+  el.addEventListener('focusin', hold);
+  el.addEventListener('focusout', arm);
+  arm();
 }
 
 let modalResolve = null;

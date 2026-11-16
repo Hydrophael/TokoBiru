@@ -52,7 +52,8 @@ import {
 } from './ui.js';
 import { choosePhoto, clearPhoto, compressImage, handlePhotoInput } from './photo.js';
 import './layout.js';
-import { detachPush, offerPush, resumePush, testPush, togglePush } from './push.js';
+import { detachPush, offerPush, resumePush, togglePush } from './push.js';
+import { markAllRead, notifyHooks, openNotification, panelOpen, refreshNotifications, setPanel, startNotifications, stopNotifications } from './notify.js';
 import { applySettings, installApp, loadSettings, setTextSize, setTheme, settingsModal, syncInstall, toggleSetting } from './settings.js';
 import { applyLogFilter, visibleLogIds } from './logs-grid.js';
 import { applyProductFilter } from './products-grid.js';
@@ -129,6 +130,7 @@ const validationError = fields => createError('Periksa kembali isian Anda', { fi
 
 
 hooks.onSessionExpired = () => {
+  stopNotifications();
   state.user = null;
   renderAuth();
   toast('Sesi berakhir. Masuk lagi untuk melanjutkan.', 'err');
@@ -139,6 +141,7 @@ async function startSession(user, view) {
   state.user = user;
   state.cart = storage.get(STORAGE_KEYS.cart(user.id)) || {};
   await migrateLocalAddress();
+  startNotifications();
   resumePush();
   offerPush(isStaff());   // staf ditawari saat masuk; pelanggan ditawari setelah pesanan pertama
   await show(view || defaultView());
@@ -178,6 +181,8 @@ async function migrateLocalAddress() {
 
 async function logout() {
   setProfileMenu(false);
+  setPanel(false);
+  stopNotifications();
   await detachPush();
   try {
     const result = await api('/auth/logout', { method: 'POST', body: {} });
@@ -1168,7 +1173,11 @@ const actions = {
   'set-toggle': toggleSetting,
   'install-app': installApp,
   'push-toggle': togglePush,
-  'push-test': testPush,
+
+  'notif-toggle': () => { setProfileMenu(false); setPanel(!panelOpen()); },
+  'notif-close': () => setPanel(false, { focus: true }),
+  'notif-go': openNotification,
+  'notif-read-all': markAllRead,
 
   'toggle-pw': togglePasswordVisibility,
   'forgot-open': () => forgotModal(loginEmailHint()),
@@ -1458,6 +1467,7 @@ async function onSubmit(e) {
 
 function onClick(e) {
   if (profileMenuOpen() && !e.target.closest('.pm')) setProfileMenu(false);
+  if (panelOpen() && !e.target.closest('.np')) setPanel(false);
   const el = e.target.closest('[data-act]');
   if (!el) return;
   if (el.closest('.pm-pop') && profileMenuOpen()) setProfileMenu(false, { focus: true });
@@ -1525,6 +1535,7 @@ function onInput(e) {
 }
 
 function handleEscape(modalOpen) {
+  if (panelOpen()) { setPanel(false, { focus: true }); return; }
   if (profileMenuOpen()) { setProfileMenu(false, { focus: true }); return; }
   const active = document.activeElement;
   if (modalOpen) closeModal();
@@ -1646,6 +1657,7 @@ function bindEvents() {
   document.addEventListener('input', onInput);
   document.addEventListener('focusin', onOtpFocus);
   document.addEventListener('focusin', e => { if (profileMenuOpen() && !e.target.closest('.pm')) setProfileMenu(false); });
+  document.addEventListener('focusin', e => { if (panelOpen() && !e.target.closest('.np')) setPanel(false); });
   document.addEventListener('focusout', onOtpFocus);
   document.addEventListener('pointerup', onOtpPointer);
   document.addEventListener('keydown', onModalKeydown);
@@ -1701,12 +1713,15 @@ async function boot() {
   applySettings();
   bindEvents();
   setInterval(pollQris, QRIS_POLL_MS);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) pollQris(); });
-  addEventListener('pageshow', () => pollQris());
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { pollQris(); refreshNotifications(); } });
+  addEventListener('pageshow', () => { pollQris(); refreshNotifications(); });
+  addEventListener('online', () => refreshNotifications());
+  notifyHooks.go = view => { if (state.user) show(view === 'dashboard' && !isCustomer() ? 'dashboard' : 'orders'); };
   setInterval(tickTimers, 1000);
   // Notifikasi diketuk saat aplikasi sudah terbuka: pindah ke layar yang diminta
   navigator.serviceWorker?.addEventListener('message', event => {
     if (event.data?.type === 'open-view' && state.user) show(event.data.view);
+    if (event.data?.type === 'push-received') refreshNotifications();   // kabar baru tiba: lonceng ikut diperbarui
   });
 
   try {

@@ -1,4 +1,4 @@
-// TokoBiru - notifikasi pesanan (Web Push) untuk admin dan master.
+// TokoBiru - notifikasi pesanan (Web Push) untuk staf (admin, master) dan pelanggan.
 // Browser menyimpan "langganan" ke layanan push-nya, server menyimpan langganan itu, lalu mengirim kabar
 // (pesanan baru, pembayaran masuk, masalah pembayaran) walau aplikasi sedang tertutup. Service worker (sw.js) yang menampilkannya.
 
@@ -14,6 +14,9 @@ const isIos = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.
 const isInstalled = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
 export const pushAvailable = () => Boolean(state.user?.push_key);
+
+// true bila perangkat ini akan menampilkan banner notifikasinya sendiri untuk akun yang sedang masuk
+export const pushActive = () => supported() && Notification.permission === 'granted' && storage.get(flagKey()) === true;
 
 function keyBytes(base64Url) {
   const padded = (base64Url + '='.repeat((4 - base64Url.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
@@ -89,7 +92,9 @@ export async function offerPush(ask = false) {
   }
   if (!ask || Notification.permission !== 'default' || storage.get(askedKey())) return;
   storage.set(askedKey(), true);
-  const message = isCustomer() ? 'Mau dikabari saat pesananmu dibayar dan dikirim?' : 'Aktifkan notifikasi pesanan baru di perangkat ini?';
+  const message = isCustomer()
+    ? 'Mau dikabari saat pesananmu dibayar dan dikirim, walau aplikasi tertutup?'
+    : 'Aktifkan notifikasi pesanan baru? Kabar akan muncul di perangkat ini walau aplikasi tertutup.';
   toast(message, '', {
     label: 'Aktifkan',
     fn: async () => {
@@ -125,14 +130,13 @@ export async function resumePush() {
 // --- Baris di modal Pengaturan ---
 
 export const pushRowHtml = () => !pushAvailable() ? '' :
-  `<div class="set-row"><div class="set-t"><b id="sw-push">Notifikasi pesanan</b><small id="push-hint">Memeriksa…</small>
-    <button type="button" class="btn sm" data-act="push-test" hidden style="margin-top:8px">Kirim notifikasi uji</button></div>
+  `<div class="set-row"><div class="set-t"><b id="sw-push">Notifikasi pesanan</b><small id="push-hint">Memeriksa…</small></div>
     <button type="button" class="tgl" role="switch" data-act="push-toggle" aria-labelledby="sw-push" aria-checked="false" disabled><i></i></button></div>`;
 
 const HINT = {
   unsupported: 'Browser ini belum mendukung notifikasi.',
-  'need-install': 'Di iPhone, pasang dulu TokoBiru: ketuk Bagikan, lalu Tambah ke Layar Utama. Buka dari ikonnya.',
-  denied: 'Notifikasi diblokir di pengaturan browser. Izinkan dulu di sana, lalu muat ulang.',
+  'need-install': 'Di iPhone, pasang dulu TokoBiru: ketuk tombol Bagikan (kotak dengan panah ke atas) di Safari, pilih Tambah ke Layar Utama, lalu buka dari ikonnya.',
+  denied: 'Notifikasi diblokir browser. Ketuk ikon gembok di samping alamat situs, pilih Notifikasi lalu Izinkan, kemudian muat ulang halaman.',
   off: 'Dapat kabar pesanan baru dan pembayaran masuk, walau aplikasi tertutup.',
   'off-customer': 'Dapat kabar saat pesananmu dibayar, dikirim, atau dibatalkan, walau aplikasi tertutup.',
   on: 'Aktif di perangkat ini.'
@@ -146,7 +150,6 @@ export async function renderPushRow() {
   toggle.setAttribute('aria-checked', String(status === 'on'));
   toggle.disabled = !['on', 'off'].includes(status);
   $('#push-hint').textContent = HINT[status === 'off' && isCustomer() ? 'off-customer' : status];
-  $('[data-act="push-test"]').hidden = status !== 'on';
 }
 
 export async function togglePush(el) {
@@ -165,18 +168,5 @@ export async function togglePush(el) {
   } finally {
     delete el.dataset.busy;
     renderPushRow();
-  }
-}
-
-export async function testPush(el) {
-  if (el.disabled) return;
-  el.disabled = true;
-  try {
-    const result = await api('/push/test', { method: 'POST', body: {} });
-    toast(result.sent ? 'Notifikasi uji dikirim. Seharusnya muncul sebentar lagi.' : 'Terkirim ke layanan, tapi perangkat belum menerimanya. Coba aktifkan ulang.', result.sent ? 'ok' : 'err');
-  } catch (err) {
-    toast(err.message, 'err');
-  } finally {
-    el.disabled = false;
   }
 }

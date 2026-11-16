@@ -6,10 +6,10 @@
 // - File lain (halaman, JS, CSS) memakai "jaringan dulu": bila ada sinyal, versi terbaru yang dipakai,
 //   jadi setelah deploy tidak ada campuran file lama dan baru. Salinan tersimpan hanya dipakai saat offline.
 
-const CACHE = 'tokobiru-shell-v10';
+const CACHE = 'tokobiru-shell-v12';
 const NETWORK_TIMEOUT_MS = 4000;   // lewat batas ini dan ada salinan tersimpan, pakai salinan
 const SHELL = ['/', '/static/style.css', '/static/app.js', '/static/core.js', '/static/views.js',
-  '/static/ui.js', '/static/photo.js', '/static/settings.js', '/static/push.js', '/static/layout.js', '/static/webix-core.js', '/static/logs-grid.js', '/static/products-grid.js', '/static/theme.js', '/static/qr.js', '/static/pwa.js',
+  '/static/ui.js', '/static/photo.js', '/static/settings.js', '/static/push.js', '/static/notify.js', '/static/layout.js', '/static/webix-core.js', '/static/logs-grid.js', '/static/products-grid.js', '/static/theme.js', '/static/qr.js', '/static/pwa.js',
   '/static/icons/pay/dana.png', '/static/icons/pay/shopeepay.png', '/static/icons/pay/ovo.png'];
 
 self.addEventListener('install', event => {
@@ -72,11 +72,17 @@ self.addEventListener('push', event => {
   const options = {
     body: data.body || '',
     icon: '/static/icons/icon-192.png',
+    badge: '/static/icons/badge-96.png',   // ikon kecil monokrom di bilah status Android
     data: { url: typeof data.url === 'string' && data.url.startsWith('/') ? data.url : '/' }
   };
   // Tag sama = menggantikan notifikasi lama untuk pesanan yang sama, bukan menumpuk
   if (data.tag) { options.tag = data.tag; options.renotify = true; }
-  event.waitUntil(self.registration.showNotification(data.title || 'TokoBiru', options));
+  event.waitUntil((async () => {
+    // Aplikasi yang sedang terbuka diberi tahu supaya lonceng di dalamnya langsung diperbarui
+    const windows = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    windows.forEach(client => client.postMessage({ type: 'push-received' }));
+    await self.registration.showNotification(data.title || 'TokoBiru', options);
+  })());
 });
 
 self.addEventListener('notificationclick', event => {
