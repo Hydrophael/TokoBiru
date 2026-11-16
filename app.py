@@ -253,6 +253,7 @@ def ensure_indexes(db):
     ensure_unique_order_code_index(db)
     db.logs.create_index([("ts", DESCENDING)])
     db.logs.create_index([("ts", ASCENDING)], expireAfterSeconds=LOG_RETENTION_DAYS * 86400, name="logs_ttl")
+    db.rate_limits.create_index([("expires", ASCENDING)], expireAfterSeconds=0, name="rate_ttl")
 
 
 def get_db():
@@ -632,8 +633,67 @@ SECURITY_HEADERS = {
 def client_ip():
     if not has_request_context():
         return ""
-    ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.remote_addr or "")
-    return sanitize(ip)[:45]
+    if IS_VERCEL:
+        # Vercel mengisi header ini sendiri; X-Forwarded-For dari klien tidak dipercaya
+        ip = request.headers.get("X-Vercel-Forwarded-For", "") or request.headers.get("X-Real-IP", "")
+    else:
+        ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    return sanitize(ip or request.remote_addr or "")[:45]
+
+
+# --- Pembatasan percobaan (rate limit) per IP, disimpan di MongoDB karena serverless tidak punya memori bersama ---
+# bucket: (batas percobaan, jendela waktu dalam detik) per alamat IP
+RATE_RULES = {
+    "login": (20, 600),
+    "register": (5, 3600),
+    "forgot": (5, 3600),
+    "reset": (15, 600),
+}
+
+
+def _hit(key, window_seconds):
+    """Tambah penghitung `key`; mulai jendela baru bila yang lama sudah lewat. Mengembalikan hitungan terbaru."""
+    db = get_db()
+    now = utcnow()
+    for _ in range(2):
+        try:
+            doc = db.rate_limits.find_one_and_update(
+                {"_id": key, "expires": {"$gt": now}},
+                {"$inc": {"n": 1}}, return_document=ReturnDocument.AFTER)
+            if doc:
+                return doc["n"]
+            db.rate_limits.replace_one(
+                {"_id": key},
+                {"_id": key, "n": 1, "expires": now + timedelta(seconds=window_seconds)},
+                upsert=True)
+            return 1
+        except DuplicateKeyError:
+            continue
+    return 1
+
+
+def _count(key):
+    doc = get_db().rate_limits.find_one({"_id": key, "expires": {"$gt": utcnow()}})
+    return doc["n"] if doc else 0
+
+
+def rate_limit(bucket):
+    limit, window = RATE_RULES[bucket]
+    if _hit(f"rl:{bucket}:{client_ip() or 'unknown'}", window) > limit:
+        raise ApiError("Terlalu banyak percobaan dari jaringan Anda. Coba lagi beberapa menit lagi.", 429)
+
+
+# Penguncian login per akun + IP: penebak hanya mengunci dirinya sendiri, pemilik akun dari jaringan lain tetap bisa masuk
+def login_locked(user, ip):
+    return _count(f"lf:{user['_id']}:{ip}") >= MAX_FAILED_LOGIN
+
+
+def login_failed(user, ip):
+    _hit(f"lf:{user['_id']}:{ip}", LOCK_MINUTES * 60)
+
+
+def login_ok(user, ip):
+    get_db().rate_limits.delete_one({"_id": f"lf:{user['_id']}:{ip}"})
 
 
 def current_user():
@@ -758,6 +818,7 @@ def auth_me():
 
 @app.post("/api/auth/register")
 def auth_register():
+    rate_limit("register")
     clean = user_form(json_body())
     db = get_db()
     doc = new_user_doc(clean, "user")
@@ -775,27 +836,29 @@ def auth_register():
 
 @app.post("/api/auth/login")
 def auth_login():
+    rate_limit("login")
     form = Form(json_body())
     form.text("identifier", "Username/email", 1, 120, lower=True)
     form.password("password", "Password", enforce_policy=False)
     clean = form.done()
     identifier = clean["identifier"]
     db = get_db()
+    ip = client_ip() or "unknown"
     user = db.users.find_one({"$or": [{"username": identifier}, {"email": identifier}]})
     now = utcnow()
-    if user and user.get("locked_until") and user["locked_until"] > now:
+    if user and login_locked(user, ip):
         raise account_locked_error()
     stored_hash = user["password_hash"] if user else DUMMY_HASH
     password_ok = check_password_hash(stored_hash, clean["password"])
     if user is None or not password_ok:
         if user:
-            record_failed_login(db, user, now)
+            login_failed(user, ip)
         audit("login_gagal", f"identifier={identifier[:40]}" if user else "akun tidak dikenal")
         raise ApiError("Username/email atau password salah", 401)
     if not user.get("active", True):
         raise ApiError("Akun Anda dinonaktifkan. Silakan hubungi pengelola toko.", 403)
-    db.users.update_one({"_id": user["_id"]},
-                        {"$set": {"failed": 0, "last_login": now, "locked_until": None}})
+    login_ok(user, ip)
+    db.users.update_one({"_id": user["_id"]}, {"$set": {"failed": 0, "last_login": now}})
     start_session(user)
     audit("login", "berhasil masuk", user)
     return jsonify({"user": public_user(user), "csrf": session["csrf"]})
@@ -1038,6 +1101,7 @@ def require_email_enabled():
 
 @app.post("/api/auth/forgot")
 def auth_forgot():
+    rate_limit("forgot")
     require_email_enabled()
     form = Form(json_body())
     form.text("email", "Email", 5, 120, lower=True, regex=EMAIL_RE, regex_msg=EMAIL_ERROR)
@@ -1070,6 +1134,7 @@ def auth_forgot():
 
 @app.post("/api/auth/reset")
 def auth_reset():
+    rate_limit("reset")
     require_email_enabled()
     form = Form(json_body())
     form.text("email", "Email", 5, 120, lower=True, regex=EMAIL_RE, regex_msg=EMAIL_ERROR)
@@ -1116,6 +1181,7 @@ def auth_reset():
 
 @app.post("/api/auth/reset/check")
 def auth_reset_check():
+    rate_limit("reset")
     require_email_enabled()
     form = Form(json_body())
     form.text("email", "Email", 5, 120, lower=True, regex=EMAIL_RE, regex_msg=EMAIL_ERROR)
