@@ -1495,11 +1495,22 @@ def insert_order(db, order, user, key):
     raise ApiError("Gagal membuat kode pesanan. Coba lagi.", 503)
 
 
-def check_status_change(user, current_status, new_status):
+def staff_next_statuses(order):
+    # COD: uang baru diterima saat barang sampai, jadi tidak lewat "paid" dan boleh dibatalkan saat dikirim
+    if order.get("cod"):
+        if order["status"] == "pending":
+            return {"shipped", "cancelled"}
+        if order["status"] == "shipped":
+            return {"completed", "cancelled"}
+    return TRANSITIONS[order["status"]]
+
+
+def check_status_change(user, order, new_status):
+    current_status = order["status"]
     if user["role"] == "user":
         if (current_status, new_status) not in USER_TRANSITIONS:
             raise ApiError("Anda tidak dapat mengubah pesanan ke status tersebut", 403)
-    elif new_status not in TRANSITIONS[current_status]:
+    elif new_status not in staff_next_statuses(order):
         raise ApiError(f"Status tidak bisa berubah dari '{current_status}' ke '{new_status}'", 422)
 
 
@@ -1650,6 +1661,7 @@ def orders_create():
                  "shipping_fee": fee, "payment_method": clean["payment_method"], "total": subtotal + fee,
                  "phone": clean["phone"], "address": clean["address"], "note": clean["note"],
                  "recipient": clean["recipient"],
+                 "cod": clean["payment_method"] == "cash",
                  "status": "pending", "created_at": now, "updated_at": now}
         if clean["payment_method"] == "qris":
             order["expires_at"] = now + timedelta(minutes=QRIS_TTL_MINUTES)
@@ -1702,11 +1714,14 @@ def orders_status(order_id):
     if not order or (user["role"] == "user" and order["user_id"] != user["_id"]):
         raise ApiError("Pesanan tidak ditemukan", 404)
     current_status = order["status"]
-    check_status_change(user, current_status, new_status)
+    check_status_change(user, order, new_status)
     now = utcnow()
     changes = {"status": new_status, "updated_at": now}
     if new_status == "paid":
         changes["paid_at"] = now
+    elif new_status == "completed" and order.get("cod") and current_status == "shipped":
+        # COD: uang tunai diterima saat pesanan selesai
+        changes.update(paid_at=now, paid_via="cash")
     # Status dicek ulang di filter supaya tidak bentrok dengan perubahan lain
     result = db.orders.update_one({"_id": target_id, "status": current_status}, {"$set": changes})
     if result.modified_count != 1:
@@ -1991,15 +2006,18 @@ def orders_clear_history():
 
 def order_summary(db):
     by_status = {status: 0 for status in ORDER_STATUS}
-    revenue = 0
-    pipeline = [{"$group": {"_id": "$status", "n": {"$sum": 1}, "sum": {"$sum": "$total"}}}]
+    revenue = paid_orders = 0
+    pipeline = [{"$group": {"_id": {"status": "$status", "cod": {"$eq": ["$cod", True]}},
+                            "n": {"$sum": 1}, "sum": {"$sum": "$total"}}}]
     for row in db.orders.aggregate(pipeline):
-        status = row["_id"]
+        status, cod = row["_id"]["status"], row["_id"]["cod"]
         if status in by_status:
-            by_status[status] = row["n"]
-            if status in REVENUE_STATUS:
+            by_status[status] += row["n"]
+            # COD yang masih dikirim belum dihitung: uangnya baru diterima saat selesai
+            if status in REVENUE_STATUS and not (cod and status == "shipped"):
                 revenue += row["sum"]
-    return by_status, revenue
+                paid_orders += row["n"]
+    return by_status, revenue, paid_orders
 
 
 def today_summary(db):
@@ -2008,7 +2026,8 @@ def today_summary(db):
     revenue = 0
     paid_today = {"$or": [{"paid_at": {"$gte": start}},
                           {"paid_at": {"$exists": False}, "created_at": {"$gte": start}}]}
-    pipeline = [{"$match": {**paid_today, "status": {"$in": list(REVENUE_STATUS)}}},
+    pipeline = [{"$match": {**paid_today, "status": {"$in": list(REVENUE_STATUS)},
+                            "$nor": [{"cod": True, "status": "shipped"}]}},
                 {"$group": {"_id": None, "sum": {"$sum": "$total"}}}]
     for row in db.orders.aggregate(pipeline):
         revenue = row["sum"]
@@ -2020,12 +2039,13 @@ def today_summary(db):
 def stats():
     db = get_db()
     sweep_expired_orders(db)
-    by_status, revenue = order_summary(db)
+    by_status, revenue, paid_orders = order_summary(db)
     low_stock = (db[PRODUCT_COLLECTION].find({"stock": {"$lte": LOW_STOCK_LIMIT}}, NO_IMAGE)
                  .sort("stock", 1).limit(LOW_STOCK_LIST_SIZE))
     recent = db.orders.find().sort("created_at", -1).limit(RECENT_ORDERS_SIZE)
     result = {
         "revenue": revenue,
+        "paid_orders": paid_orders,
         "today": today_summary(db),
         "orders": {"total": sum(by_status.values()), **by_status},
         "products": db[PRODUCT_COLLECTION].count_documents({}),
