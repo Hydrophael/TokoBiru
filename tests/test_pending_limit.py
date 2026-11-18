@@ -13,10 +13,8 @@ LIMIT = 2
 
 
 @pytest.fixture
-def db(monkeypatch):
-    database = mongomock.MongoClient().tokobiru
-    monkeypatch.setattr(tb, "_db", database)
-    monkeypatch.setattr(tb, "_last_sweep", None)
+def db(monkeypatch, use_db):
+    database = use_db(mongomock.MongoClient().tokobiru)
     monkeypatch.setattr(tb, "MAX_PENDING_ORDERS", LIMIT)
     return database
 

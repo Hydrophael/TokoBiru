@@ -13,10 +13,8 @@ NEW = "barubaru456"
 
 
 @pytest.fixture
-def db(monkeypatch):
-    database = mongomock.MongoClient().tokobiru
-    monkeypatch.setattr(tb, "_db", database)
-    monkeypatch.setattr(tb, "_last_sweep", None)
+def db(use_db):
+    database = use_db(mongomock.MongoClient().tokobiru)
     return database
 
 

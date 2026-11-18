@@ -16,6 +16,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import dotenv
 dotenv.load_dotenv = lambda *args, **kwargs: False
 os.environ["SHIPPING_FEE"] = "0"
+# Pengaman: bila patch _db meleset, koneksi gagal dengan jelas dan tidak menyentuh database asli
+os.environ["MONGO_URI"] = "mongodb://127.0.0.1:1"
 os.environ["PAY_INFO"] = "BCA 1234567890 a.n. TokoBiru Uji"
 
 from mongomock.collection import BulkOperationBuilder as _Bulk
@@ -28,15 +30,26 @@ PASSWORD = "rahasia123"
 
 
 @pytest.fixture()
-def db(monkeypatch):
+def db(monkeypatch, use_db):
     fake = mongomock.MongoClient()["tokobiru_test"]
     tokobiru.ensure_indexes(fake)
-    monkeypatch.setattr(tokobiru, "_db", fake)
+    use_db(fake, reset_sweep=False)
     # hash cepat supaya tes tidak lambat
     monkeypatch.setattr(tokobiru, "generate_password_hash", lambda p: "plain:" + p)
     monkeypatch.setattr(tokobiru, "check_password_hash", lambda h, p: h == "plain:" + p)
     monkeypatch.setattr(tokobiru, "DUMMY_HASH", "plain:tidak-akan-cocok")
     return fake
+
+
+@pytest.fixture()
+def use_db(monkeypatch):
+    """Satu-satunya tempat tes memasang database tiruan. Bila _db pindah modul, cukup ubah di sini."""
+    def apply(database, reset_sweep=True):
+        monkeypatch.setattr(tokobiru, "_db", database)
+        if reset_sweep:
+            monkeypatch.setattr(tokobiru, "_last_sweep", None)
+        return database
+    return apply
 
 
 class Client:

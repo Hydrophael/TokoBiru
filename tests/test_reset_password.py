@@ -16,11 +16,9 @@ EMAIL = "budi@t.test"
 
 
 @pytest.fixture
-def env(monkeypatch):
+def env(monkeypatch, use_db):
     """(db, sent): database kosong dengan satu pelanggan `budi`; email ditampung di `sent`, bukan dikirim."""
-    database = mongomock.MongoClient().tokobiru
-    monkeypatch.setattr(tb, "_db", database)
-    monkeypatch.setattr(tb, "_last_sweep", None)
+    database = use_db(mongomock.MongoClient().tokobiru)
     monkeypatch.setattr(tb, "EMAIL_ENABLED", True)
     sent = []
     monkeypatch.setattr(tb, "send_email", lambda to, subject, body, html=None, inline_images=None: sent.append((to, body, html)))
