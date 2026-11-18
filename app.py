@@ -65,12 +65,14 @@ from flask import (Flask, Response, g, has_request_context, jsonify, request,
 from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument, UpdateOne
 from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
 from werkzeug.exceptions import HTTPException
-from werkzeug.security import check_password_hash, generate_password_hash
 
 from tokobiru.proof_reader import ProofReadError, evaluate_proof, proof_fingerprint, read_transfer_proof
 
 from tokobiru.config import *  # noqa: F401,F403,E402  (sementara: nama-nama lama tetap bisa dipakai di sini)
 from tokobiru.config import _env_int, _env_str  # noqa: F401,E402
+from tokobiru import passwords  # noqa: E402
+from tokobiru.errors import ApiError  # noqa: E402
+from tokobiru.util import format_rupiah, utcnow  # noqa: E402
 
 app = Flask(__name__)
 app.config.update(
@@ -83,10 +85,6 @@ app.config.update(
 )
 
 _db = None
-
-
-def utcnow():
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def mongo_uri():
@@ -170,14 +168,6 @@ def get_db():
     _db = db
     bootstrap(db)
     return db
-
-
-class ApiError(Exception):
-    def __init__(self, message, status=400, fields=None):
-        super().__init__(message)
-        self.message = message
-        self.status = status
-        self.fields = fields or {}
 
 
 @app.errorhandler(ApiError)
@@ -483,7 +473,7 @@ def new_user_doc(fields, role):
         "name": fields["name"],
         "username": fields["username"],
         "email": fields["email"],
-        "password_hash": generate_password_hash(fields["password"]),
+        "password_hash": passwords.hash_password(fields["password"]),
         "role": role,
         "active": True,
         "created_at": utcnow(),
@@ -919,9 +909,6 @@ def notifications_read():
     return jsonify({"ok": True})
 
 
-DUMMY_HASH = generate_password_hash(secrets.token_hex(8))
-
-
 def start_session(user):
     session.clear()
     session.permanent = True
@@ -987,8 +974,8 @@ def auth_login():
     now = utcnow()
     if user and login_locked(user, ip):
         raise account_locked_error()
-    stored_hash = user["password_hash"] if user else DUMMY_HASH
-    password_ok = check_password_hash(stored_hash, clean["password"])
+    stored_hash = user["password_hash"] if user else passwords.DUMMY_HASH
+    password_ok = passwords.check_password(stored_hash, clean["password"])
     if user is None or not password_ok:
         if user:
             login_failed(user, ip)
@@ -1135,7 +1122,7 @@ def auth_password():
     now = utcnow()
     if user.get("locked_until") and user["locked_until"] > now:
         raise ApiError(f"Ganti password dikunci sementara karena terlalu banyak percobaan. Coba lagi dalam {LOCK_MINUTES} menit.", 429)
-    if not check_password_hash(user["password_hash"], clean["current_password"]):
+    if not passwords.check_password(user["password_hash"], clean["current_password"]):
         record_failed_login(db, user, now)
         login_failed(user, client_ip())
         audit("password_gagal", "password lama salah")
@@ -1144,7 +1131,7 @@ def auth_password():
         message = "Password baru harus berbeda dari yang lama"
         raise ApiError(message, 422, {"new_password": message})
     db.users.update_one({"_id": user["_id"]}, {
-        "$set": {"password_hash": generate_password_hash(clean["new_password"]),
+        "$set": {"password_hash": passwords.hash_password(clean["new_password"]),
                  "failed": 0, "locked_until": None},
         "$inc": {"session_version": 1}})
     session["sv"] = db.users.find_one({"_id": user["_id"]}).get("session_version", 1)
@@ -1312,7 +1299,7 @@ def auth_reset():
             raise reset_locked_error()
         result = db.users.update_one(
             {"_id": user["_id"], "reset_code_hash": reset_code_digest(user["_id"], clean["code"])},
-            {"$set": {"password_hash": generate_password_hash(clean["new_password"]),
+            {"$set": {"password_hash": passwords.hash_password(clean["new_password"]),
                       "failed": 0, "locked_until": None},
              "$inc": {"session_version": 1},
              "$unset": {**RESET_FIELDS, **RESET_GUARD_FIELDS}})
@@ -1567,10 +1554,6 @@ def parse_expected_prices(items):
         form.integer("price", "Harga", 1, 100_000_000)
         expected[ObjectId(item["product_id"])] = form.done()["price"]
     return expected
-
-
-def format_rupiah(amount):
-    return "Rp" + f"{amount:,}".replace(",", ".")
 
 
 def release_stock(db, reserved):

@@ -25,6 +25,7 @@ _add_update = _Bulk.add_update
 _Bulk.add_update = lambda self, *a, sort=None, **k: _add_update(self, *a, **k)
 # --- akhir isolasi ---
 import app as tokobiru  # noqa: E402
+from tokobiru import passwords  # noqa: E402
 
 PASSWORD = "rahasia123"
 
@@ -35,9 +36,9 @@ def db(monkeypatch, use_db):
     tokobiru.ensure_indexes(fake)
     use_db(fake, reset_sweep=False)
     # hash cepat supaya tes tidak lambat
-    monkeypatch.setattr(tokobiru, "generate_password_hash", lambda p: "plain:" + p)
-    monkeypatch.setattr(tokobiru, "check_password_hash", lambda h, p: h == "plain:" + p)
-    monkeypatch.setattr(tokobiru, "DUMMY_HASH", "plain:tidak-akan-cocok")
+    monkeypatch.setattr(passwords, "hash_password", lambda p: "plain:" + p)
+    monkeypatch.setattr(passwords, "check_password", lambda h, p: h == "plain:" + p)
+    monkeypatch.setattr(passwords, "DUMMY_HASH", "plain:tidak-akan-cocok")
     return fake
 
 
