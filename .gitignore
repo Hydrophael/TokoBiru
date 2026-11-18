@@ -18,7 +18,7 @@ env/
 htmlcov/
 
 # Data uji dan unggahan
-struk_uji/
+test_receipts/
 uploads/
 
 # Rahasia dan ekspor data

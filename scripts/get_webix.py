@@ -1,7 +1,7 @@
 """Unduh Webix (JS, CSS, dan font) ke static/. Jalankan sekali dari root proyek:
 
-    python get_webix.py            # versi yang dipakai proyek (DEFAULT_VERSION)
-    python get_webix.py 11.4.0     # atau versi lain yang ada di npm (paket "webix")
+    python scripts/get_webix.py            # versi yang dipakai proyek (DEFAULT_VERSION)
+    python scripts/get_webix.py 11.4.0     # atau versi lain yang ada di npm (paket "webix")
 
 Hanya memakai pustaka bawaan Python. Hasilnya adalah salinan lokal, jadi CSP di app.py tidak perlu dilonggarkan
 dan versi tidak berubah sendiri setelah diunduh.
@@ -16,7 +16,7 @@ DEFAULT_VERSION = "11.4.0"   # dikunci supaya unduhan ulang tidak mengubah versi
 version = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_VERSION
 # Paket npm "webix" lewat jsDelivr: setiap versi tersedia dengan nomor persisnya (cdn.webix.com hanya punya jalur "edge")
 base = f"https://cdn.jsdelivr.net/npm/webix@{version}/"
-out = Path(__file__).resolve().parent / "static"
+out = Path(__file__).resolve().parent.parent / "static"
 
 
 def fetch(url):

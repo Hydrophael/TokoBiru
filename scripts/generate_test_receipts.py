@@ -8,8 +8,8 @@ Cara pakai (urutannya penting, jam di struk dibuat dari waktu SEKARANG):
   1. pip install pillow
   2. Buat pesanan transfer di toko, catat TOTAL-nya (mis. 87500).
   3. Isi PROOF_BANK_HINT di .env sesuai --rekening / --nama di bawah (mis. 4821 atau TokoBiru), lalu jalankan ulang server.
-  4. python buat_struk_uji.py      (akan menanyakan total; atau langsung: --total 87500 --rekening 1234564821 --nama TOKOBIRU)
-  5. Unggah satu gambar per pesanan (folder struk_uji/, daftar hasil yang diharapkan ada di struk_uji/harapan.csv).
+  4. python scripts/generate_test_receipts.py      (akan menanyakan total; atau langsung: --total 87500 --rekening 1234564821 --nama TOKOBIRU)
+  5. Unggah satu gambar per pesanan (folder test_receipts/, daftar hasil yang diharapkan ada di test_receipts/expected.csv).
      Satu pesanan = satu gambar, kecuali 14_salinan_dari_01 yang diunggah ke pesanan LAIN setelah 01 dibaca.
 """
 import argparse
@@ -131,7 +131,7 @@ def main():
     ap.add_argument("--total", type=int, help="total pesanan dalam rupiah, mis. 87500 (bila kosong, akan ditanyakan)")
     ap.add_argument("--rekening", default="1234564821", help="nomor rekening toko (4 digit terakhir harus sama dengan PROOF_BANK_HINT)")
     ap.add_argument("--nama", default="TOKOBIRU", help="nama pemilik rekening toko")
-    ap.add_argument("--out", default="struk_uji", help="folder hasil")
+    ap.add_argument("--out", default="test_receipts", help="folder hasil")
     a = ap.parse_args()
     while a.total is None:
         isi = input("Total pesanan transfer (rupiah, angka saja, mis. 87500): ").strip().replace(".", "")
@@ -178,13 +178,13 @@ def main():
     tambah("14_salinan_dari_01", Image.open(io.BytesIO(buf.getvalue())), "Mencurigakan",
            "Struk 01 disimpan ulang. Unggah ke pesanan KEDUA setelah 01 dibaca.", jpeg=70)
 
-    with open(os.path.join(a.out, "harapan.csv"), "w", newline="", encoding="utf-8") as f:
+    with open(os.path.join(a.out, "expected.csv"), "w", newline="", encoding="utf-8") as f:
         wr = csv.writer(f)
         wr.writerow(["file", "hasil_yang_diharapkan", "catatan"])
         wr.writerows(hasil)
 
     print(f"{len(hasil)} gambar dibuat di '{a.out}/' (jam struk: {tanggal(waktu)}).")
-    print("Buat pesanan transfer BARU untuk tiap gambar (total", rupiah(a.total) + "), lalu unggah. Daftar harapan: harapan.csv")
+    print("Buat pesanan transfer BARU untuk tiap gambar (total", rupiah(a.total) + "), lalu unggah. Daftar harapan: expected.csv")
     print("PROOF_BANK_HINT yang cocok dengan struk ini:", a.rekening[-4:], "atau", a.nama)
 
 

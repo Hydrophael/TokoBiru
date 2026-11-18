@@ -5,19 +5,20 @@ Memakai proof_reader.read_transfer_proof yang SAMA dengan aplikasi (permintaan, 
 jawaban identik), jadi hasilnya mewakili apa yang terjadi di aplikasi. Jalankan di folder proyek, dari jaringan/server
 yang sama dengan aplikasi (kecepatan sangat bergantung pada jaringan):
 
-  python uji_model.py struk_uji/01_cocok.png                      # semua model kandidat, mode cepat (seperti saat unggah)
-  python uji_model.py struk_uji/01_cocok.png --manual             # mode teliti (seperti tombol "Baca dengan AI")
-  python uji_model.py struk_uji/01_cocok.png gemini-3.5-flash-lite gemini-2.5-flash   # hanya model tertentu
+  python scripts/benchmark_models.py test_receipts/01_cocok.png                      # semua model kandidat, mode cepat (seperti saat unggah)
+  python scripts/benchmark_models.py test_receipts/01_cocok.png --manual             # mode teliti (seperti tombol "Baca dengan AI")
+  python scripts/benchmark_models.py test_receipts/01_cocok.png gemini-3.5-flash-lite gemini-2.5-flash   # hanya model tertentu
 
 Kunci diambil dari GEMINI_API_KEY (lingkungan, atau berkas .env di folder ini). Kunci tidak pernah dicetak.
-Gambar uji: buat dengan buat_struk_uji.py, atau pakai tangkapan layar struk asli (jangan bagikan struk asli ke orang lain).
+Gambar uji: buat dengan scripts/generate_test_receipts.py, atau pakai tangkapan layar struk asli (jangan bagikan struk asli ke orang lain).
 """
 import mimetypes
 import os
 import sys
 import time
 
-import proof_reader as pr
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # akar proyek
+import proof_reader as pr  # noqa: E402
 
 KANDIDAT = [
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
