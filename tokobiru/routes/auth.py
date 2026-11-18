@@ -1,16 +1,44 @@
 import hashlib
 import secrets
-from flask import Blueprint, Response, current_app, g, has_request_context, jsonify, request, send_from_directory, session
-from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
+
+from flask import Blueprint, Response, current_app, jsonify, request, session
+from pymongo.errors import DuplicateKeyError, PyMongoError
+
 from tokobiru.core import passwords
-from tokobiru.core.config import DUMMY_QRIS, EMAIL_ENABLED, EWALLET_TTL_MINUTES, FREE_SHIPPING_MIN, LOCK_MINUTES, PAY_INFO, PROOF_READER_ENABLED, PROOF_RETENTION_DAYS, QRIS_ENABLED, QRIS_TTL_MINUTES, SHIPPING_FEE, XENDIT_ENABLED
+from tokobiru.core.config import (
+    DUMMY_QRIS,
+    EMAIL_ENABLED,
+    EWALLET_TTL_MINUTES,
+    FREE_SHIPPING_MIN,
+    LOCK_MINUTES,
+    PAY_INFO,
+    PROOF_READER_ENABLED,
+    PROOF_RETENTION_DAYS,
+    QRIS_ENABLED,
+    QRIS_TTL_MINUTES,
+    SHIPPING_FEE,
+    XENDIT_ENABLED,
+)
 from tokobiru.core.connection import get_db
-from tokobiru.core.security import audit, client_ip, current_user, login_failed, login_locked, login_ok, login_required, rate_limit
-from tokobiru.core.validation import Form, NAME_ERROR, PERSON_RE, json_body
+from tokobiru.core.security import (
+    audit,
+    client_ip,
+    current_user,
+    login_failed,
+    login_locked,
+    login_ok,
+    login_required,
+    rate_limit,
+)
 from tokobiru.core.util import utcnow
+from tokobiru.core.validation import NAME_ERROR, PERSON_RE, Form, json_body
 from tokobiru.errors import ApiError
 from tokobiru.services.products import split_image
-from tokobiru.services.sessions import account_locked_error, record_failed_login, start_session
+from tokobiru.services.sessions import (
+    account_locked_error,
+    record_failed_login,
+    start_session,
+)
 from tokobiru.services.users import new_user_doc, public_user, user_form
 
 bp = Blueprint("auth", __name__)

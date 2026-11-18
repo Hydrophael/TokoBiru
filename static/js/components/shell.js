@@ -1,9 +1,12 @@
 // TokoBiru - Kerangka halaman, navigasi utama, indikator tab, & menu profil
 import { NAV, ROLE_LABEL } from '../core/constants.js';
 import { isCustomer, state } from '../core/state.js';
-import { $, $$, brandHtml, escapeHtml, getInitials, icon } from '../core/format.js';
+import { $, $$, avatarTone, brandHtml, escapeHtml, getInitials, icon } from '../core/format.js';
 import { bellHtml, renderBell } from './notify.js';
-import { cartDrawerHtml } from './cart.js';
+import { drawCart } from './cart.js';
+
+// Diisi app.js: syncInstall ada di pages/profile.js, yang mengimpor shell.js (hindari impor melingkar)
+export const shellHooks = { syncInstall: () => {} };
 
 function navHtml(items) {
   return items.map(item => {
@@ -49,7 +52,7 @@ let navFrame;
 addEventListener('resize', () => { cancelAnimationFrame(navFrame); navFrame = requestAnimationFrame(moveNavIndicator); });
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(moveNavIndicator);
 
-const firstName = name => String(name).trim().split(/\s+/)[0] || String(name);
+export const firstName = name => String(name).trim().split(/\s+/)[0] || String(name);
 
 const AVATAR_URL = /^\/api\/(?:auth\/avatar|users\/[0-9a-fA-F]{24}\/avatar)\?v=\d+$/;
 export const avatarPhoto = user => (typeof user?.photo === 'string' && AVATAR_URL.test(user.photo) ? user.photo : '');
@@ -59,7 +62,7 @@ export const avatarHtml = (user, size = '') => {
   return `<span class="av tone${avatarTone(user)}${size ? ' ' + size : ''}${photo ? ' has-photo' : ''}" aria-hidden="true">${photo ? `<img src="${photo}" alt="" decoding="async">` : escapeHtml(getInitials(user.name))}</span>`;
 };
 
-const roleTag = user => `<span class="tag ${escapeHtml(user.role)}">${escapeHtml(ROLE_LABEL[user.role] || user.role)}</span>`;
+export const roleTag = user => `<span class="tag ${escapeHtml(user.role)}">${escapeHtml(ROLE_LABEL[user.role] || user.role)}</span>`;
 
 const menuItem = (act, iconName, title, hint = '', attrs = '') =>
   `<button type="button" class="pm-item" role="menuitem" data-act="${act}"${attrs}>${icon(iconName, 20)}<span class="pm-t"><b>${title}</b>${hint ? `<small>${hint}</small>` : ''}</span></button>`;
@@ -154,6 +157,11 @@ function setProfileMenu(open, { focus = false } = {}) {
   root.classList.toggle('open', open);
   $('#app .top')?.classList.toggle('menu-open', open);
   button.setAttribute('aria-expanded', String(open));
-  if (open) { syncInstall(); $('[role=menuitem]:not([hidden])', root)?.focus(); }
+  if (open) { shellHooks.syncInstall(); $('[role=menuitem]:not([hidden])', root)?.focus(); }
   else if (focus) button.focus();
 }
+
+export {
+  profileMenuOpen,
+  setProfileMenu
+};

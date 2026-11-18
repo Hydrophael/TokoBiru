@@ -1,6 +1,6 @@
 // TokoBiru - Router tampilan, manajemen sesi, & sinkronisasi URL parameter
 import { NAV, PHONE_RE, STORAGE_KEYS } from './constants.js';
-import { defaultView, isCustomer, isEwallet, state, storage } from './state.js';
+import { defaultView, isCustomer, isEwallet, isStaff, state, storage } from './state.js';
 import { $, $$, cleanText, escapeHtml, normalizePhone } from './format.js';
 import { api, hooks } from '../api/client.js';
 import { toast } from '../components/ui.js';
@@ -223,4 +223,15 @@ async function watchPayReturn() {
   }
 }
 
-export { startSession, onAuthed, logout, loadProducts, show, reload, takeOpenView, takePayReturn, handlePayReturn, watchPayReturn };
+export {
+  startSession,
+  onAuthed,
+  logout,
+  loadProducts,
+  show,
+  reload,
+  takeOpenView,
+  takePayReturn,
+  handlePayReturn,
+  watchPayReturn
+};

@@ -20,7 +20,8 @@ import {
 } from '../components/notify.js';
 import {
   profileMenuOpen,
-  setProfileMenu
+  setProfileMenu,
+  shellHooks
 } from '../components/shell.js';
 import {
   addOneToCart,
@@ -105,6 +106,9 @@ import {
   syncInstall
 } from '../pages/profile.js';
 import { cartQty } from './state.js';
+
+// syncInstall ada di profile.js; shell.js memanggilnya lewat hook
+shellHooks.syncInstall = syncInstall;
 
 // Daftarkan view per halaman
 Object.assign(pageHooks.views, {

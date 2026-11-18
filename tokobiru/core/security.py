@@ -12,20 +12,27 @@ from flask import g, has_request_context, request, session
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
-from tokobiru.core.config import (IS_VERCEL, LOCK_MINUTES, MAX_FAILED_LOGIN, MAX_JSON_BYTES, PRODUCT_WRITE_RE,
-                             PROFILE_WRITE_RE, PROOF_WRITE_RE, ROLES)
-from tokobiru.errors import ApiError
+from tokobiru.core.config import (
+    IS_VERCEL,
+    LOCK_MINUTES,
+    MAX_FAILED_LOGIN,
+    MAX_JSON_BYTES,
+    PRODUCT_WRITE_RE,
+    PROFILE_WRITE_RE,
+    PROOF_WRITE_RE,
+    ROLES,
+)
 from tokobiru.core.connection import get_db
 from tokobiru.core.util import utcnow
 from tokobiru.core.validation import OID_RE, sanitize
-
+from tokobiru.errors import ApiError
 
 SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 # Tanpa script inline; script hanya boleh dari domain sendiri
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; script-src 'self'; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; "
+    "font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; "
     "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 )
 SECURITY_HEADERS = {

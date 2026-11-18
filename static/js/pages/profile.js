@@ -11,7 +11,6 @@ import {
 } from '../core/constants.js';
 import { isCustomer, state, storage } from '../core/state.js';
 import {
-  $,
   $$,
   cleanText,
   escapeHtml,
@@ -21,11 +20,11 @@ import {
 } from '../core/format.js';
 import { api } from '../api/client.js';
 import { closeModal, confirmDialog, openModal, toast } from '../components/ui.js';
-import { avatarHtml, refreshProfileMenu, setProfileMenu } from '../components/shell.js';
+import { avatarHtml, avatarPhoto, refreshProfileMenu, roleTag, setProfileMenu } from '../components/shell.js';
 import { AVATAR_HINT, avatarPreviewHtml } from '../components/photo.js';
 import { pushRowHtml, renderPushRow, togglePush } from '../components/push.js';
 import { reload } from '../core/router.js';
-import { checkNewPassword, updatePasswordChecks } from './auth.js';
+import { checkNewPassword } from './auth.js';
 
 const myAddresses = () => state.user.addresses || [];
 const findAddress = id => myAddresses().find(item => item.id === id);
@@ -348,5 +347,3 @@ export const profileFormHandlers = {
     addressesModal();
   },
 };
-
-export { loadSettings, applySettings, syncInstall };

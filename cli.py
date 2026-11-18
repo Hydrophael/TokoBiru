@@ -1,7 +1,9 @@
 import base64
 import getpass
 import sys
-from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
+
+from pymongo.errors import DuplicateKeyError
+
 from tokobiru.core.connection import get_db
 from tokobiru.errors import ApiError
 from tokobiru.services.bootstrap import DEMO_PASSWORD, DEMO_USERS, seed_demo

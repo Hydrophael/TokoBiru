@@ -1,13 +1,19 @@
-from flask import Blueprint, Response, current_app, g, has_request_context, jsonify, request, send_from_directory, session
-from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
+from flask import Blueprint, Response, jsonify
+from pymongo.errors import DuplicateKeyError
+
 from tokobiru.core.config import ASSIGNABLE_ROLES, STAFF_ROLES, USERS_LIMIT
 from tokobiru.core.connection import get_db
 from tokobiru.core.security import audit, current_user, roles_required
-from tokobiru.core.validation import Form, json_body, object_id
 from tokobiru.core.serializers import serialize
+from tokobiru.core.validation import Form, json_body, object_id
 from tokobiru.errors import ApiError
 from tokobiru.services.orders.expiry import cancel_pending_orders
-from tokobiru.services.users import forget_user_devices, new_user_doc, user_form, user_listing
+from tokobiru.services.users import (
+    forget_user_devices,
+    new_user_doc,
+    user_form,
+    user_listing,
+)
 
 bp = Blueprint("users", __name__)
 

@@ -202,4 +202,8 @@ export const checkoutFormHandlers = {
   }
 };
 
-export { openCheckout, updateCheckout, pickCheckoutAddress };
+export {
+  openCheckout,
+  updateCheckout,
+  pickCheckoutAddress
+};

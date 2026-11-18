@@ -1,5 +1,7 @@
 from tokobiru.routes import password_reset as pw_reset_route
-from tokobiru.services import mailer as mailer_svc, password_reset as pw_reset_svc
+from tokobiru.services import mailer as mailer_svc
+from tokobiru.services import password_reset as pw_reset_svc
+
 """Tes untuk Lupa password: kode email, sekali pakai, kedaluwarsa, batas tebakan, dan sesi"""
 import os
 import re

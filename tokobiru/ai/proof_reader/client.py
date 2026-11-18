@@ -3,8 +3,8 @@ import json
 import re
 import urllib.error
 import urllib.request
-from .parsing import ProofReadError, parse_reading
 
+from .parsing import ProofReadError, parse_reading
 
 API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 

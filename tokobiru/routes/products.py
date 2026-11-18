@@ -1,13 +1,21 @@
-from flask import Blueprint, Response, current_app, g, has_request_context, jsonify, request, send_from_directory, session
-from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument, UpdateOne
-from tokobiru.core.config import PRODUCTS_LIMIT, PRODUCT_COLLECTION, STAFF_ROLES
+from flask import Blueprint, Response, jsonify, request
+from pymongo import ReturnDocument
+
+from tokobiru.core.config import PRODUCT_COLLECTION, PRODUCTS_LIMIT, STAFF_ROLES
 from tokobiru.core.connection import get_db
 from tokobiru.core.security import audit, login_required, roles_required
-from tokobiru.core.validation import json_body, object_id, sanitize
 from tokobiru.core.util import format_rupiah, utcnow
+from tokobiru.core.validation import json_body, object_id, sanitize
 from tokobiru.errors import ApiError
 from tokobiru.services.orders.expiry import sweep_expired_orders
-from tokobiru.services.products import NO_IMAGE, parse_base_stock, product_form, product_json, search_products, split_image
+from tokobiru.services.products import (
+    NO_IMAGE,
+    parse_base_stock,
+    product_form,
+    product_json,
+    search_products,
+    split_image,
+)
 
 bp = Blueprint("products", __name__)
 

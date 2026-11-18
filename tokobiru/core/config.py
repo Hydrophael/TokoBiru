@@ -6,6 +6,7 @@ masih besar) lewat `from tokobiru.core.config import *`.
 """
 import os
 import re
+import secrets
 import sys
 from datetime import timedelta
 
@@ -59,7 +60,7 @@ SECRET_KEY = _env_str("SECRET_KEY")
 if not SECRET_KEY:
     if IS_VERCEL:
         raise RuntimeError("SECRET_KEY belum diset di Environment Variables Vercel.")
-    SECRET_KEY = "dev-only-secret-ganti-di-produksi"
+    SECRET_KEY = secrets.token_hex(32)
 
 MAX_JSON_BYTES = 64 * 1024
 MAX_PRODUCT_BODY_BYTES = 1024 * 1024   # foto bukti transfer lebih besar (lihat PROOF_IMAGE_MAX_CHARS)

@@ -1,17 +1,20 @@
 // TokoBiru - Halaman daftar pesanan, detail pesanan, & perubahan status
-import { ORDER_FLOW, SHIPPING_LABEL } from '../core/constants.js';
+import { ORDER_FLOW, PAYMENT_LABEL, SHIPPING_LABEL, STATUS } from '../core/constants.js';
 import { isCustomer, isEwallet, isStaff, state } from '../core/state.js';
-import { $, emptyState, escapeHtml, formatDate, formatRupiah, icon, statusTag } from '../core/format.js';
+import { $, countdownText, emptyState, escapeHtml, formatDate, formatRupiah, icon, msLeft, orderStatusText } from '../core/format.js';
 import { api } from '../api/client.js';
 import { closeModal, confirmDialog, openModal, toast, withTransition } from '../components/ui.js';
 import { reorder } from '../components/cart.js';
 import {
   autoReadProof,
+  cashNoteHtml,
+  ewalletBoxHtml,
   orderPaymentActions,
   orderPaymentHooks,
   paymentBoxHtml,
   pollQris,
   proofBoxHtml,
+  qrisBoxHtml,
   qrisPaidHtml,
   showOrderSuccess,
   tickTimers,
@@ -74,7 +77,7 @@ function customerOrderActions(order) {
   }
 }
 
-const orderActions = order => (isStaff() ? staffOrderActions(order) : customerOrderActions(order));
+const orderActionsHtml = order => (isStaff() ? staffOrderActions(order) : customerOrderActions(order));
 
 const orderPaymentHtml = order => paymentBoxHtml(order, 'Cara bayar');
 
@@ -170,7 +173,7 @@ export function orderDetailModal(order) {
     <ul class="r-lines">${order.items.map(orderLineHtml).join('')}${shippingLineHtml(order)}</ul>
     <div class="r-total"><span>Total</span><strong class="num">${formatRupiah(order.total)}</strong></div>
     ${orderInfoHtml(order)}${orderAutoCancelHtml(order)}${staff && order.status === 'pending' && order.cancel_requested_at ? '<div class="r-note"><b>Pelanggan minta pembatalan</b><br>Cek mutasi dulu. Bila uang sudah masuk, kembalikan dana setelah membatalkan.</div>' : ''}${staff ? paymentFlagBox(order) + proofBoxHtml(order, false) : ''}${payment}
-    <div class="foot wrap"><button type="button" class="btn sm" data-act="close-modal">Tutup</button>${orderActions(order)}${remove}</div>
+    <div class="foot wrap"><button type="button" class="btn sm" data-act="close-modal">Tutup</button>${orderActionsHtml(order)}${remove}</div>
   </div>`);
 }
 
@@ -350,9 +353,6 @@ export const orderActions = {
 
 export {
   ordersView,
-  orderCards,
-  orderRailHtml,
-  orderDetailModal,
   qrisPaidHtml,
   showOrderSuccess,
   uploadProof,

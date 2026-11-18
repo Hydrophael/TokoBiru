@@ -1,12 +1,18 @@
 import hashlib
-from flask import Blueprint, Response, current_app, g, has_request_context, jsonify, request, send_from_directory, session
+
+from flask import Blueprint, jsonify
+
 from tokobiru.core.config import PUSH_KEY_RE, PUSH_MAX_DEVICES_PER_USER
 from tokobiru.core.connection import get_db
 from tokobiru.core.security import audit, current_user, login_required
-from tokobiru.core.validation import json_body, object_id
 from tokobiru.core.util import utcnow
+from tokobiru.core.validation import json_body, object_id
 from tokobiru.errors import ApiError
-from tokobiru.services.notifications import notification_json, push_endpoint_ok, require_push_enabled
+from tokobiru.services.notifications import (
+    notification_json,
+    push_endpoint_ok,
+    require_push_enabled,
+)
 
 bp = Blueprint("push", __name__)
 

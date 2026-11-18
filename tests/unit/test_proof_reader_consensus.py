@@ -1,9 +1,9 @@
-"""Tes untuk tokobiru/proof_reader.py. Jalankan: pytest tests/test_proof_reader.py"""
+"""Tes untuk tokobiru/ai/proof_reader. Jalankan: pytest tests/unit/test_proof_reader_consensus.py"""
 import io
 import json
 import unittest
 import urllib.error
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest import mock
 
 from tokobiru.ai import proof_reader as pr

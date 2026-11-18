@@ -1,7 +1,7 @@
 // TokoBiru - Komponen pembayaran QRIS/e-wallet, polling status, & bukti transfer AI
-import { PAYMENT_LABEL, QRIS_POLL_MS } from '../core/constants.js';
-import { isStaff, state } from '../core/state.js';
-import { $, $$, countdownText, escapeHtml, formatDate, formatRupiah, icon, msLeft, payRow } from '../core/format.js';
+import { PAYMENT_LABEL } from '../core/constants.js';
+import { isEwallet, isStaff, state } from '../core/state.js';
+import { $, $$, countdownText, escapeHtml, ewalletBadgeHtml, formatDate, formatRupiah, icon, msLeft, payRow } from '../core/format.js';
 import { api } from '../api/client.js';
 import { qrSvg } from '../../vendor/qr.js';
 import { burst, openModal, toast } from './ui.js';
@@ -62,7 +62,7 @@ export function ewalletBoxHtml(order) {
   </section>`;
 }
 
-const cashNoteHtml = order =>
+export const cashNoteHtml = order =>
   `<div class="r-note">Siapkan uang tunai <b>${formatRupiah(order.total)}</b> ${order.shipping_method === 'pickup' ? 'saat mengambil pesanan di toko' : 'saat pesanan diterima'}. Kode pesanan: <b>${escapeHtml(order.code)}</b>.${order.status === 'pending' && order.expires_at ? ` Pesanan dibatalkan otomatis bila belum diproses sebelum <b>${formatDate(order.expires_at)}</b>.` : ''}</div>`;
 
 export function showOrderSuccess(order) {
@@ -295,10 +295,6 @@ export const orderPaymentActions = {
 
 export {
   paymentBoxHtml,
-  qrisPaidHtml,
-  qrisBoxHtml,
-  ewalletBoxHtml,
-  showOrderSuccess,
   proofBoxHtml,
   uploadProof,
   autoReadProof,

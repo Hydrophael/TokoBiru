@@ -1,6 +1,6 @@
 import secrets
-from tokobiru.core.util import utcnow
 
+from tokobiru.core.util import utcnow
 
 ORDER_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 

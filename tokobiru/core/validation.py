@@ -12,7 +12,6 @@ from flask import request
 from tokobiru.core.config import PASSWORD_MAX_LEN, PASSWORD_MIN_LEN
 from tokobiru.errors import ApiError
 
-
 TAG_RE = re.compile(r"<[^>]*>")
 CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 BLANK_LINES_RE = re.compile(r"\n{3,}")

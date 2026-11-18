@@ -1,4 +1,3 @@
-from flask import current_app
 """TokoBiru - koneksi MongoDB: alamat, nama database, migrasi koleksi lama, dan indeks.
 
 get_db() menyimpan koneksi di _db. Tes memasang database tiruan dengan mengganti tokobiru.core.connection._db
@@ -9,8 +8,14 @@ import logging
 from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.errors import OperationFailure, PyMongoError
 
-from tokobiru.core.config import (IS_VERCEL, LEGACY_PRODUCT_COLLECTION, LOG_RETENTION_DAYS,
-                             PRODUCT_COLLECTION, PROOF_RETENTION_DAYS, _env_str)
+from tokobiru.core.config import (
+    IS_VERCEL,
+    LEGACY_PRODUCT_COLLECTION,
+    LOG_RETENTION_DAYS,
+    PRODUCT_COLLECTION,
+    PROOF_RETENTION_DAYS,
+    _env_str,
+)
 
 log = logging.getLogger("app")   # logger yang sama dengan current_app.logger
 
@@ -79,7 +84,7 @@ def ensure_indexes(db):
                            partialFilterExpression={"idem_key": {"$type": "string"}})
     ensure_unique_order_code_index(db)
     db.logs.create_index([("ts", DESCENDING)])
-    db.logs.create_index([("ts", ASCENDING)], expireAfterSeconds=LOG_RETENTION_DAYS * 86400, name="logs_ttl")
+    ensure_ttl_index(db.logs, "ts", LOG_RETENTION_DAYS, "logs_ttl")
     db.rate_limits.create_index([("expires", ASCENDING)], expireAfterSeconds=0, name="rate_ttl")
     db.push_subs.create_index([("user_id", ASCENDING)])
     db.order_proofs.create_index([("sha256", ASCENDING)])

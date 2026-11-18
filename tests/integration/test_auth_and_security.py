@@ -1,11 +1,8 @@
-from tokobiru.routes import orders as orders_route
-from tokobiru.services import products as products_svc
 """Unit test TokoBiru: validasi, autentikasi, otorisasi, produk, pesanan, pengguna."""
-import mongomock
 import pytest
+from conftest import PASSWORD
 
 import app as tokobiru
-from conftest import PASSWORD
 
 PRODUCT = {"name": "Minyak Goreng 2L", "category": "Sembako", "price": 38000, "stock": 20}
 ADDRESS = "Jl. Merdeka No. 1, Ungaran"

@@ -8,7 +8,6 @@ import {
   emptyProductFilter
 } from '../core/constants.js';
 import {
-  filteredLogs,
   managedProducts,
   productGroupCount,
   state
@@ -22,15 +21,16 @@ import {
   escapeHtml,
   formatDate,
   formatRupiah,
+  getInitials,
   icon,
   logTone,
-  miniHtml,
-  stockFlag,
+  productImage,
   stockInfo
 } from '../core/format.js';
 import { api } from '../api/client.js';
 import { closeModal, confirmDialog, openModal, toast } from '../components/ui.js';
-import { avatarHtml } from '../components/shell.js';
+import { avatarPhoto } from '../components/shell.js';
+import { truncationNotice } from './shop.js';
 import { PHOTO_HINT, choosePhoto, clearPhoto, photoPreviewHtml } from '../components/photo.js';
 import {
   actionTagHtml,
@@ -451,7 +451,7 @@ export const adminFormHandlers = {
     closeModal();
     toast(id ? 'Produk diperbarui' : 'Produk ditambahkan', 'ok');
     await reload();
-  },,
+  },
 
   async 'user-create'(form, data) {
     await api('/users', { method: 'POST', body: data });
@@ -463,12 +463,8 @@ export const adminFormHandlers = {
 
 export {
   productsView,
-  productRows,
-  afterProductsRender,
   usersView,
   logsView,
-  syncLogSelection,
-  afterLogsRender,
   changeUserSetting,
   typeLogSearch,
   setLogAction,

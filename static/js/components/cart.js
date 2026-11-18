@@ -1,8 +1,8 @@
 // TokoBiru - Drawer keranjang belanja, perhitungan total, & sinkronisasi tombol kartu
 import { MAX_CART_QTY, STORAGE_KEYS } from '../core/constants.js';
-import { cartQty, isCustomer, state, storage } from '../core/state.js';
-import { $, $$, escapeHtml, formatRupiah, icon, miniHtml } from '../core/format.js';
-import { EASE, flyToCart, openModal, closeModal, reducedMotion, toast } from './ui.js';
+import { cartQty, state, storage } from '../core/state.js';
+import { $, $$, emptyState, escapeHtml, formatRupiah, icon, miniHtml, priceHtml } from '../core/format.js';
+import { EASE, flyToCart, closeModal, reducedMotion, toast, tweenNumber } from './ui.js';
 
 let cartReturnFocus = null;
 
@@ -179,4 +179,28 @@ function reorder(el) {
   if (!added) return toast('Barang pada pesanan ini sedang tidak tersedia', 'err');
   toast(added + ' barang masuk keranjang' + (skipped ? ', ' + skipped + ' tidak tersedia' : ''));
   openCart();
+}
+
+export {
+  addOneToCart,
+  removeFromCart,
+  openCart,
+  closeCart,
+  reorder
+};
+
+// Kaki kartu produk di halaman Belanja: harga + tombol Tambah / stepper jumlah / Habis
+export function cardFoot(product) {
+  const qty = cartQty(product.id);
+  const name = escapeHtml(product.name);
+
+  let control;
+  if (product.stock === 0) {
+    control = '<button class="btn sm" disabled>Habis</button>';
+  } else if (qty) {
+    control = `<div class="qty sm"><button data-act="cart-dec" data-id="${product.id}" aria-label="Kurangi ${name}">−</button><span class="num" aria-live="polite">${qty}</span><button data-act="cart-inc" data-id="${product.id}" aria-label="Tambah ${name}">+</button></div>`;
+  } else {
+    control = `<button class="btn sm primary" data-act="add-cart" data-id="${product.id}" aria-label="Tambah ${name} ke keranjang">${icon('plus', 14)} Tambah</button>`;
+  }
+  return `<div class="lfoot" data-q="${qty}">${priceHtml(product.price)}${control}</div>`;
 }

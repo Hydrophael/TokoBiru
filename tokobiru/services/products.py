@@ -1,10 +1,12 @@
-from flask import current_app
 import re
 import time
-from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
-from tokobiru.core.config import PRODUCTS_LIMIT, PRODUCT_COLLECTION
-from tokobiru.core.validation import Form, parse_int
+
+from flask import current_app
+from pymongo.errors import OperationFailure
+
+from tokobiru.core.config import PRODUCT_COLLECTION, PRODUCTS_LIMIT
 from tokobiru.core.serializers import serialize
+from tokobiru.core.validation import Form, parse_int
 from tokobiru.errors import ApiError
 
 

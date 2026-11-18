@@ -1,10 +1,24 @@
-from flask import current_app
 import hashlib
 import time
-from tokobiru.core.config import GEMINI_API_KEY, PROOF_BANK_HINT, PROOF_CONFIRM_MIN_SECONDS, PROOF_CONFIRM_READ, PROOF_READER_FALLBACK_MODEL, PROOF_READER_MODEL
+
+from flask import current_app
+
+from tokobiru.ai.proof_reader import (
+    ProofReadError,
+    evaluate_proof,
+    proof_fingerprint,
+    read_transfer_proof,
+)
+from tokobiru.core.config import (
+    GEMINI_API_KEY,
+    PROOF_BANK_HINT,
+    PROOF_CONFIRM_MIN_SECONDS,
+    PROOF_CONFIRM_READ,
+    PROOF_READER_FALLBACK_MODEL,
+    PROOF_READER_MODEL,
+)
 from tokobiru.core.security import audit
 from tokobiru.core.util import utcnow
-from tokobiru.ai.proof_reader import ProofReadError, evaluate_proof, proof_fingerprint, read_transfer_proof
 
 
 def proof_is_reused(db, order_id, digest, reference, fingerprint=None):

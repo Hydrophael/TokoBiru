@@ -263,12 +263,12 @@ export const authFormHandlers = {
       method: 'POST',
       body: { name: data.name, username: data.username, email: data.email, password: data.password }
     });
-    await onAuthed(result);,
+    await onAuthed(result);
+  },
   ...createResetFormHandlers(checkNewPassword, updatePasswordChecks)
 };
 
 export {
-  renderAuth,
   updatePasswordChecks,
   onOtpInput,
   onOtpFocus,

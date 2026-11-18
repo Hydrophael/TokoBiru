@@ -1,54 +1,29 @@
 import re
-from datetime import datetime, timedelta
-from .parsing import TZ_NAMES
+from datetime import timedelta
+
 from .comparison import _status_kind, compare_readings, proof_fingerprint
+from .parsing import TZ_NAMES
 
-
-MIN_CONFIDENCE = 0.6                       # di bawah ini hasilnya "perlu dicek", apa pun isinya
-
-
-TIME_TOLERANCE = timedelta(minutes=5)      # selisih jam HP/bank yang masih wajar
-
-
-# Bila struk TIDAK mencetak zona waktu, jam dibaca sebagai WIB, padahal pelanggan di WITA (+1 jam) atau WIT (+2 jam)
-# mencetak jam setempat, jadi batas "di masa depan" dilonggarkan. Bila zona tercetak, dipakai toleransi ketat.
+MIN_CONFIDENCE = 0.6
+TIME_TOLERANCE = timedelta(minutes=5)
 FUTURE_TOLERANCE = timedelta(hours=2, minutes=5)
-
-
-WIB_OFFSET = timedelta(hours=7)            # struk bank di Indonesia mencetak jam setempat; server memakai UTC
-
-
-REVISION_LIMIT = 4                         # foto bukti diunggah/diganti sebanyak ini atau lebih = mencurigakan
-
-
-# --- Menilai: aturan biasa, bukan model ----------------------------------------------------------------------
+WIB_OFFSET = timedelta(hours=7)
+REVISION_LIMIT = 4
 
 def _rupiah(amount):
     return "Rp" + f"{amount:,}".replace(",", ".")
 
-
-# Kata bank/e-wallet dan kata sambung rekening: bukan nama pemilik, jadi tidak dihitung sebagai bukti nama
 _BANK_WORDS = {"bank", "rekening", "rek", "norek", "bca", "bri", "bni", "mandiri", "bsi", "cimb", "jago", "seabank",
                "dana", "gopay", "ovo", "shopeepay", "linkaja", "qris", "atas", "nama", "no", "an"}
 
-
 def _name_key(text):
     return re.sub(r"[^0-9a-z]", "", text.casefold())
-
 
 def _owner_name(destination):
     words = [w for w in re.findall(r"[a-z]+", destination.casefold()) if w not in _BANK_WORDS]
     return "".join(words)
 
-
 def destination_status(destination, hint):
-    """'ok' bila tujuan di struk cocok dengan ciri rekening toko, 'bad' bila jelas berbeda, 'unknown' bila struk tidak
-    memuat jenis data yang sama dengan hint (mis. hint berupa angka tetapi struk hanya mencetak nama).
-
-    Hint boleh beberapa, dipisah koma: '4821,TokoBiru'. Angka (3+ digit) dicocokkan sebagai akhiran nomor rekening per
-    kelompok angka, bukan sebagai potongan di mana saja (aman untuk nomor tersamar ****4821, dan nomor lain yang kebetulan
-    memuat 4821 di tengah tidak lolos). Nama dicocokkan tanpa spasi/tanda baca dan tanpa memandang huruf besar-kecil;
-    nama yang dipotong bank ('TOKOBIR') tetap diterima."""
     groups = [g for g in re.findall(r"\d+", destination) if len(g) >= 3]
     owner = _owner_name(destination)
     dest_key = _name_key(destination)
@@ -70,10 +45,8 @@ def destination_status(destination, hint):
         return "bad"
     return "unknown"
 
-
 def _matches_hint(destination, hint):
     return destination_status(destination, hint) == "ok"
-
 
 ADVICE = {
     "not_successful": "Struk menunjukkan transaksi belum berhasil (pending atau gagal). Cek mutasi rekening sebelum menandai dibayar.",
@@ -86,20 +59,10 @@ ADVICE = {
     "not_proof": "Foto ini tampaknya bukan bukti transfer. Minta pelanggan mengirim bukti yang benar.",
 }
 
-
 DECISIVE = ("match", "mismatch", "suspicious")
-
 
 def evaluate_proof(reading, *, total, created_at, now, bank_hint="", duplicate=False, uploaded_at=None, revision=1,
                    second=None):
-    """Bandingkan hasil baca dengan pesanan. created_at, now, uploaded_at dalam UTC (naive), seperti di app.py.
-    second = pembacaan kedua atas foto yang sama (opsional); bila berbeda, hasil yang menentukan diturunkan jadi unclear.
-
-    Hasil: {verdict, confidence (0-100), checks[], advice, reason, reference, ...}. verdict salah satu dari
-    match | mismatch | suspicious | unclear. Urutan prioritas: foto bukan bukti / keyakinan rendah -> unclear;
-    status transaksi belum berhasil -> mismatch; dipakai ulang -> suspicious; tanda diedit / diunggah berkali-kali -> suspicious;
-    nominal atau tujuan salah -> mismatch; waktu janggal -> suspicious; ada yang tak terbaca -> unclear; selebihnya match.
-    Dua pembacaan yang berbeda menurunkan hasil menentukan menjadi unclear."""
     checks = []
 
     def add(key, label, read, expected, status, note):
@@ -120,11 +83,9 @@ def evaluate_proof(reading, *, total, created_at, now, bank_hint="", duplicate=F
         add("time", "Waktu transfer", "tidak terbaca", "", "unknown", "Harus setelah pesanan dibuat")
     else:
         offset = reading.get("timezone")
-        # Zona tercetak: toleransi ketat. Tidak tercetak: dibaca WIB dengan batas masa depan longgar (pelanggan WITA/WIT)
         zone_hours, future_tolerance = (offset, TIME_TOLERANCE) if offset else (7, FUTURE_TOLERANCE)
         as_utc = local_time - timedelta(hours=zone_hours)
         shown = local_time.strftime("%Y-%m-%d %H:%M") + " " + TZ_NAMES[zone_hours]
-        # Batas atas = saat foto diunggah (transfer tak mungkin terjadi setelah buktinya diunggah), bukan saat dibaca
         upper = min(now, uploaded_at) if uploaded_at else now
         if as_utc < created_at - TIME_TOLERANCE:
             add("time", "Waktu transfer", shown, "", "bad", "Sebelum pesanan dibuat")
@@ -201,7 +162,7 @@ def evaluate_proof(reading, *, total, created_at, now, bank_hint="", duplicate=F
         "confidence": round(reading["confidence"] * 100),
         "checks": checks,
         "advice": advice,
-        "reason": advice_key,          # match | mismatch | suspicious | tampered | inconsistent | unclear | not_proof | not_successful
+        "reason": advice_key,
         "reference": reading["reference"],
         "fingerprint": proof_fingerprint(reading),
         "reads": 2 if second is not None else 1,

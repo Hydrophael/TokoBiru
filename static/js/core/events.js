@@ -320,4 +320,9 @@ function bindEvents() {
   addEventListener('online', () => toast('Tersambung kembali', 'ok'));
 }
 
-export { clearErrors, showErrors, clearFieldError, bindEvents };
+export {
+  clearErrors,
+  showErrors,
+  clearFieldError,
+  bindEvents
+};

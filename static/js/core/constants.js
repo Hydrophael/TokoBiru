@@ -19,7 +19,7 @@ export const STATUS = {
   cancelled: ['Dibatalkan', 'err']
 };
 
-const ACTION_LABEL = {
+export const ACTION_LABEL = {
   register: 'Daftar Akun', login: 'Login', login_gagal: 'Login Gagal', logout: 'Logout',
   password_ubah: 'Password Diubah', password_gagal: 'Ganti Password Gagal', reset_minta: 'Minta Reset Password',
   password_reset: 'Password Direset', reset_gagal: 'Reset Gagal',
@@ -36,8 +36,8 @@ const ACTION_LABEL = {
   pembayaran_tak_dikenal: 'Pembayaran Tak Dikenal', pembayaran_masalah_selesai: 'Masalah Bayar Selesai'
 };
 
-const DETAIL_KEY = { role: 'peran', active: 'status' };
-const DETAIL_VALUE = { user: 'Pelanggan', admin: 'Admin', master: 'Master', True: 'Aktif', False: 'Nonaktif' };
+export const DETAIL_KEY = { role: 'peran', active: 'status' };
+export const DETAIL_VALUE = { user: 'Pelanggan', admin: 'Admin', master: 'Master', True: 'Aktif', False: 'Nonaktif' };
 
 export const LOG_GROUPS = [
   { id: '',        label: 'Semua',            test: () => true },
@@ -84,12 +84,12 @@ export const EWALLET_BRAND = {
 
 export const EWALLET_GROUP = 'ewallet';
 
-const LOW_STOCK_LIMIT = 5;
-const STOCK_BAR_FULL = 40;
+export const LOW_STOCK_LIMIT = 5;
+export const STOCK_BAR_FULL = 40;
 export const MAX_TOASTS = 2;
 export const SHOP_PAGE_SIZE = 12;
 
-const EMOJI_RULES = [
+export const EMOJI_RULES = [
   [/beras|padi/i, '🌾'], [/minyak/i, '🫒'], [/telur/i, '🥚'], [/kopi/i, '☕'],
   [/\bteh\b/i, '🍵'], [/susu/i, '🥛'], [/roti|kue|biskuit/i, '🍞'], [/madu/i, '🍯'],
   [/sabun|shampo|deterjen|pembersih/i, '🧼'], [/tisu|tissue/i, '🧻'],
@@ -104,9 +104,9 @@ const EMOJI_RULES = [
   [/kamera|camera/i, '📷'], [/jam tangan|smartwatch/i, '⌚'], [/kipas|\bac\b/i, '🌀'],
   [/kabel|charger|baterai|powerbank|elektronik/i, '🔌']
 ];
-const DEFAULT_EMOJI = '🛒';
+export const DEFAULT_EMOJI = '🛒';
 
-const ICONS = {
+export const ICONS = {
   sliders: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
   grid:    '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>',
   up:      '<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>',
@@ -150,3 +150,10 @@ export const CODE_REJECTED = 'Kode salah atau sudah kedaluwarsa. Periksa lagi, a
 export const emptyFilters = () => ({ inStock: false, min: null, max: null });
 export const emptyLogFilter = () => ({ q: '', group: '', action: '' });
 export const emptyProductFilter = () => ({ group: '', category: '' });
+
+export const PRODUCT_GROUPS = [
+  ['low', 'Stok menipis', ''],
+  ['out', 'Stok habis', '']
+];
+
+export const isEwallet = method => Boolean(EWALLET_BRAND[method]);

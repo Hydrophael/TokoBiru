@@ -1,8 +1,8 @@
 import re
-from tokobiru.core.validation import Form, NAME_ERROR, PERSON_RE, PHONE_ERROR, PHONE_RE
-from tokobiru.core.serializers import address_json
-from tokobiru.errors import ApiError
 
+from tokobiru.core.serializers import address_json
+from tokobiru.core.validation import NAME_ERROR, PERSON_RE, PHONE_ERROR, PHONE_RE, Form
+from tokobiru.errors import ApiError
 
 ADDRESS_LIMIT = 5
 

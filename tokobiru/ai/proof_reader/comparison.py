@@ -1,6 +1,5 @@
 import re
 
-
 # --- Membandingkan dua pembacaan -----------------------------------------------------------------------------
 
 def _digit_groups(text):

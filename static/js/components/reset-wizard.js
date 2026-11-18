@@ -1,7 +1,7 @@
 // TokoBiru - Komponen modal wizard OTP reset password (4 langkah)
 import { CODE_REJECTED } from '../core/constants.js';
 import { state } from '../core/state.js';
-import { $, $$, createError, escapeHtml, icon } from '../core/format.js';
+import { $, $$, cleanText, createError, escapeHtml, icon, validationError } from '../core/format.js';
 import { api } from '../api/client.js';
 import { EASE, burst, closeModal, openModal, reducedMotion, toast } from './ui.js';
 import { clearErrors, showErrors } from '../core/events.js';
@@ -390,6 +390,7 @@ export function createResetFormHandlers(checkNewPassword, updatePasswordChecks) 
     const identifier = $('#f-id');
     if (identifier) identifier.value = email;
     showResetStep(4);
+  }
   };
 }
 
@@ -397,13 +398,9 @@ export const resetActions = {
   'forgot-resend': resendResetCode,
   'wiz-back': wizardBack,
   'wiz-finish': finishReset
-};
+}
 
 export {
-  forgotModal,
-  setResetInfo,
-  renderOtp,
-  showResetStep,
   onOtpInput,
   onOtpFocus,
   onOtpPointer

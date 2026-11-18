@@ -1,5 +1,6 @@
 from flask import current_app
-from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
+from pymongo.errors import PyMongoError
+
 from tokobiru.core.config import PRODUCT_COLLECTION, _env_str
 from tokobiru.core.util import utcnow
 from tokobiru.services.users import new_user_doc

@@ -3,7 +3,17 @@ import smtplib
 import ssl
 from email.message import EmailMessage
 from html import escape as html_escape
-from tokobiru.core.config import BASE_DIR, RESET_CODE_MINUTES, SMTP_FROM, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT, SMTP_TIMEOUT, SMTP_USER
+
+from tokobiru.core.config import (
+    BASE_DIR,
+    RESET_CODE_MINUTES,
+    SMTP_FROM,
+    SMTP_HOST,
+    SMTP_PASSWORD,
+    SMTP_PORT,
+    SMTP_TIMEOUT,
+    SMTP_USER,
+)
 
 
 def send_email(to, subject, body, html=None, inline_images=None):

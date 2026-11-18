@@ -8,7 +8,6 @@ from bson import ObjectId
 
 from tokobiru.core.config import STAFF_ROLES, XENDIT_SIMULATE_SCAN
 
-
 HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key", "session_version", "pay_token", "qr_id", "qr_string",
                  "ewallet_id", "ewallet_url",
                  "reset_code_hash", "reset_expires", "reset_sent_at", "reset_failed", "reset_locked_until",

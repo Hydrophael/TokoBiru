@@ -1,8 +1,16 @@
 from tokobiru.core import passwords
 from tokobiru.core.config import ASSIGNABLE_ROLES, VAPID_PUBLIC_KEY
-from tokobiru.core.validation import EMAIL_ERROR, EMAIL_RE, Form, NAME_ERROR, PERSON_RE, USERNAME_ERROR, USERNAME_RE
 from tokobiru.core.serializers import address_json, serialize
 from tokobiru.core.util import utcnow
+from tokobiru.core.validation import (
+    EMAIL_ERROR,
+    EMAIL_RE,
+    NAME_ERROR,
+    PERSON_RE,
+    USERNAME_ERROR,
+    USERNAME_RE,
+    Form,
+)
 from tokobiru.services.notifications import PUSH_ENABLED
 
 

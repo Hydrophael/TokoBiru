@@ -19,11 +19,12 @@ import {
 } from '../core/format.js';
 import { api } from '../api/client.js';
 import { closeModal, flyToCart, openModal, withTransition } from '../components/ui.js';
-import { setCartQty } from '../components/cart.js';
+import { cardFoot, setCartQty } from '../components/cart.js';
+import { firstName } from '../components/shell.js';
 
 let searchSeq = 0;
 
-const truncationNotice = () => state.productsTotal > state.products.length
+export const truncationNotice = () => state.productsTotal > state.products.length
   ? `<p class="muted small" role="status">Katalog sangat besar: hanya ${state.products.length} dari ${state.productsTotal} produk yang dimuat.</p>`
   : '';
 
@@ -139,21 +140,6 @@ function syncSortOptions() {
   if (!searching && state.sort === 'name') state.sort = 'auto';
   select.dataset.q = String(searching);
   select.innerHTML = sortOptionsHtml();
-}
-
-function cardFoot(product) {
-  const qty = cartQty(product.id);
-  const name = escapeHtml(product.name);
-
-  let control;
-  if (product.stock === 0) {
-    control = '<button class="btn sm" disabled>Habis</button>';
-  } else if (qty) {
-    control = `<div class="qty sm"><button data-act="cart-dec" data-id="${product.id}" aria-label="Kurangi ${name}">−</button><span class="num" aria-live="polite">${qty}</span><button data-act="cart-inc" data-id="${product.id}" aria-label="Tambah ${name}">+</button></div>`;
-  } else {
-    control = `<button class="btn sm primary" data-act="add-cart" data-id="${product.id}" aria-label="Tambah ${name} ke keranjang">${icon('plus', 14)} Tambah</button>`;
-  }
-  return `<div class="lfoot" data-q="${qty}">${priceHtml(product.price)}${control}</div>`;
 }
 
 function productCardHtml(product, index) {
@@ -471,9 +457,6 @@ export const shopActions = {
 
 export {
   shopView,
-  renderList,
-  afterShopRender,
-  updateRailEdges,
   keepResultsInView,
   clearSearch,
   applyFilters,

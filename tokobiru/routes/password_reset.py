@@ -1,17 +1,45 @@
 import hmac
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from email.utils import make_msgid
-from flask import Blueprint, Response, current_app, g, has_request_context, jsonify, request, send_from_directory, session
-from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument, UpdateOne
+
+from flask import Blueprint, current_app, jsonify
+from pymongo import ReturnDocument
+
 from tokobiru.core import passwords
-from tokobiru.core.config import MAX_RESET_ATTEMPTS, RESET_CODE_LENGTH, RESET_CODE_MINUTES, RESET_COOLDOWN_SECONDS
+from tokobiru.core.config import (
+    MAX_RESET_ATTEMPTS,
+    RESET_CODE_LENGTH,
+    RESET_CODE_MINUTES,
+    RESET_COOLDOWN_SECONDS,
+)
 from tokobiru.core.connection import get_db
 from tokobiru.core.security import audit, rate_limit
-from tokobiru.core.validation import EMAIL_ERROR, EMAIL_RE, Form, RESET_CODE_ERROR, RESET_CODE_RE, RESET_FAILED_ERROR, json_body
 from tokobiru.core.util import utcnow
+from tokobiru.core.validation import (
+    EMAIL_ERROR,
+    EMAIL_RE,
+    RESET_CODE_ERROR,
+    RESET_CODE_RE,
+    RESET_FAILED_ERROR,
+    Form,
+    json_body,
+)
 from tokobiru.errors import ApiError
-from tokobiru.services.mailer import load_email_logo, reset_email_html, reset_email_text, send_email
-from tokobiru.services.password_reset import RESET_FIELDS, RESET_GUARD_FIELDS, lock_reset, new_reset_code, require_email_enabled, reset_code_digest, reset_locked_error
+from tokobiru.services.mailer import (
+    load_email_logo,
+    reset_email_html,
+    reset_email_text,
+    send_email,
+)
+from tokobiru.services.password_reset import (
+    RESET_FIELDS,
+    RESET_GUARD_FIELDS,
+    lock_reset,
+    new_reset_code,
+    require_email_enabled,
+    reset_code_digest,
+    reset_locked_error,
+)
 
 bp = Blueprint("password_reset", __name__)
 

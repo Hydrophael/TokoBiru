@@ -112,3 +112,7 @@ export function managedProducts() {
     (!query || product.name.toLowerCase().includes(query) || product.category.toLowerCase().includes(query))
   );
 }
+
+export {
+  isEwallet
+};

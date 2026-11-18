@@ -1,19 +1,60 @@
 import hashlib
 import secrets
-from flask import Blueprint, Response, current_app, g, has_request_context, jsonify, request, send_from_directory, session
-from tokobiru.core.config import DUMMY_QRIS, EWALLET_CHANNELS, PROOF_AUTO_READS_PER_HOUR, PROOF_CONFIRM_READ, PROOF_READER_ENABLED, PROOF_STAFF_READS_PER_HOUR, PROOF_STAFF_TIMEOUT, PROOF_UPLOADS_PER_HOUR, PROOF_UPLOAD_TIMEOUT, PROOF_VERDICT_TEXT, STAFF_ROLES, SYSTEM_ACTOR, XENDIT_CALLBACK_TOKEN, XENDIT_ENABLED, XENDIT_SIMULATE_SCAN
+
+from flask import Blueprint, Response, current_app, jsonify, request
+
+from tokobiru.ai.proof_reader import ProofReadError
+from tokobiru.core.config import (
+    DUMMY_QRIS,
+    EWALLET_CHANNELS,
+    PROOF_AUTO_READS_PER_HOUR,
+    PROOF_CONFIRM_READ,
+    PROOF_READER_ENABLED,
+    PROOF_STAFF_READS_PER_HOUR,
+    PROOF_STAFF_TIMEOUT,
+    PROOF_UPLOAD_TIMEOUT,
+    PROOF_UPLOADS_PER_HOUR,
+    PROOF_VERDICT_TEXT,
+    STAFF_ROLES,
+    SYSTEM_ACTOR,
+    XENDIT_CALLBACK_TOKEN,
+    XENDIT_ENABLED,
+    XENDIT_SIMULATE_SCAN,
+)
 from tokobiru.core.connection import get_db
-from tokobiru.core.security import _hit, audit, client_ip, current_user, login_required, proof_read_quota, roles_required
-from tokobiru.core.validation import Form, PROOF_IMAGE_MAX_CHARS, json_body, object_id
+from tokobiru.core.security import (
+    _hit,
+    audit,
+    client_ip,
+    current_user,
+    login_required,
+    proof_read_quota,
+    roles_required,
+)
 from tokobiru.core.serializers import order_json
 from tokobiru.core.util import format_rupiah, utcnow
+from tokobiru.core.validation import PROOF_IMAGE_MAX_CHARS, Form, json_body, object_id
 from tokobiru.errors import ApiError
-from tokobiru.ai.proof_reader import ProofReadError
 from tokobiru.services.notifications import push_staff
-from tokobiru.services.orders.expiry import cancel_expired_order, settle_overdue, sweep_expired_orders
+from tokobiru.services.orders.expiry import (
+    cancel_expired_order,
+    settle_overdue,
+    sweep_expired_orders,
+)
 from tokobiru.services.payments.proof import analyze_proof
-from tokobiru.services.payments.qris import PAY_TOKEN_RE, QRIS_ACTOR, mark_order_paid, qris_page
-from tokobiru.services.payments.xendit import GatewayError, XENDIT_ACTOR, XENDIT_PAID_STATUS, sync_ewallet_status, xendit_request
+from tokobiru.services.payments.qris import (
+    PAY_TOKEN_RE,
+    QRIS_ACTOR,
+    mark_order_paid,
+    qris_page,
+)
+from tokobiru.services.payments.xendit import (
+    XENDIT_ACTOR,
+    XENDIT_PAID_STATUS,
+    GatewayError,
+    sync_ewallet_status,
+    xendit_request,
+)
 
 bp = Blueprint("payments", __name__)
 
@@ -238,8 +279,11 @@ def xendit_webhook():
         mark_order_paid(db, order, "xendit", XENDIT_ACTOR)
     elif order["status"] == "cancelled":
         # Uang masuk setelah pesanan dibatalkan/kedaluwarsa: stok sudah dilepas, jadi ditandai untuk refund manual
-        db.orders.update_one({"_id": order["_id"]}, {"$set": {"needs_refund": True, "updated_at": utcnow()}})
-        audit("pembayaran_terlambat", f"{order['code']} dibayar setelah dibatalkan, perlu refund", XENDIT_ACTOR)
-        push_staff("Perlu refund", f"{order['code']} dibayar setelah dibatalkan. Kembalikan uang pelanggan.",
-                   f"order-{order['code']}-refund")
+        # Xendit mengirim ulang webhook bila balasan terlambat: hanya pengiriman pertama yang menandai dan memberi kabar
+        flagged = db.orders.update_one({"_id": order["_id"], "needs_refund": {"$ne": True}},
+                                       {"$set": {"needs_refund": True, "updated_at": utcnow()}})
+        if flagged.modified_count == 1:
+            audit("pembayaran_terlambat", f"{order['code']} dibayar setelah dibatalkan, perlu refund", XENDIT_ACTOR)
+            push_staff("Perlu refund", f"{order['code']} dibayar setelah dibatalkan. Kembalikan uang pelanggan.",
+                       f"order-{order['code']}-refund")
     return jsonify({"ok": True})

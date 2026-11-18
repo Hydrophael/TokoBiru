@@ -45,7 +45,6 @@ export function logTone(action) {
   return '';
 }
 
-export const isEwallet = method => String(method).startsWith('ewallet_');
 // Penanda visual per e-wallet: warna merek + nama. Untuk memakai logo resmi, simpan filenya di /static/icons/pay/ dan isi `logo`, mis. '/static/icons/pay/dana.svg'
 
 export const ewalletBadgeHtml = code => {
