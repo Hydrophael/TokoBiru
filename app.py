@@ -1299,6 +1299,7 @@ def auth_password():
         raise ApiError(f"Ganti password dikunci sementara karena terlalu banyak percobaan. Coba lagi dalam {LOCK_MINUTES} menit.", 429)
     if not check_password_hash(user["password_hash"], clean["current_password"]):
         record_failed_login(db, user, now)
+        login_failed(user, client_ip())
         audit("password_gagal", "password lama salah")
         raise ApiError("Password lama salah", 422, {"current_password": "Password lama salah"})
     if clean["new_password"] == clean["current_password"]:
@@ -1479,6 +1480,7 @@ def auth_reset():
              "$unset": {**RESET_FIELDS, **RESET_GUARD_FIELDS}})
         if result.modified_count == 1:
             audit("password_reset", "lewat kode email", user)
+            db.rate_limits.delete_many({"_id": {"$regex": "^lf:" + str(user["_id"]) + ":"}})
             return jsonify({"ok": True})
         if tries >= MAX_RESET_ATTEMPTS:
             lock_reset(db, user, now)
@@ -2689,7 +2691,7 @@ def order_summary(db):
     pipeline = [{"$group": {"_id": {"status": "$status", "cod": {"$eq": ["$cod", True]}},
                             "n": {"$sum": 1}, "sum": {"$sum": "$total"}}}]
     for row in db.orders.aggregate(pipeline):
-        status, cod = row["_id"]["status"], row["_id"]["cod"]
+        status, cod = row["_id"]["status"], row["_id"].get("cod", False)
         if status in by_status:
             by_status[status] += row["n"]
             # COD yang masih dikirim belum dihitung: uangnya baru diterima saat selesai

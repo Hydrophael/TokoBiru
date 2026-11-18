@@ -10,6 +10,18 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# --- isolasi tes: harus sebelum "import app" ---
+# Tes tidak boleh bergantung pada .env pribadi maupun versi mongomock.
+# Nilai di bawah ini yang dianggap benar oleh tes (transfer aktif, tanpa ongkir).
+import dotenv
+dotenv.load_dotenv = lambda *args, **kwargs: False
+os.environ["SHIPPING_FEE"] = "0"
+os.environ["PAY_INFO"] = "BCA 1234567890 a.n. TokoBiru Uji"
+
+from mongomock.collection import BulkOperationBuilder as _Bulk
+_add_update = _Bulk.add_update
+_Bulk.add_update = lambda self, *a, sort=None, **k: _add_update(self, *a, **k)
+# --- akhir isolasi ---
 import app as tokobiru  # noqa: E402
 
 PASSWORD = "rahasia123"
