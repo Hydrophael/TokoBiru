@@ -2,8 +2,8 @@
 
 import { $, state } from './core.js';
 
-const VENDOR = '/static/';
-const STYLES = [VENDOR + 'webix.min.css', VENDOR + 'webix-theme.css'];   // tema kita harus setelah tema Webix
+const VENDOR = '/static/vendor/';
+const STYLES = [VENDOR + 'webix.min.css', '/static/webix-theme.css'];   // tema kita harus setelah tema Webix
 const SCRIPT = VENDOR + 'webix.min.js';
 
 // Di bawah lebar ini tabel HTML lama dipakai

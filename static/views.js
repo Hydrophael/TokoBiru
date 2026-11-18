@@ -49,7 +49,7 @@ import {
   countdownText,
   msLeft,
 } from './core.js';
-import { qrSvg } from './qr.js';
+import { qrSvg } from './vendor/qr.js';
 import { bellHtml, renderBell } from './notify.js';
 import { EASE, burst, linkLabels, openModal, reducedMotion, toast, tweenNumber } from './ui.js';
 import { AVATAR_HINT, PHOTO_HINT, avatarPreviewHtml, photoPreviewHtml } from './photo.js';
