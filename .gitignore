@@ -17,6 +17,18 @@ env/
 .coverage
 htmlcov/
 
+# Data uji dan unggahan
+struk_uji/
+uploads/
+
+# Rahasia dan ekspor data
+*.pem
+*.key
+*.bson
+
+# Node
+node_modules/
+
 # Vercel
 .vercel/
 

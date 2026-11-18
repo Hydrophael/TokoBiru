@@ -497,7 +497,7 @@ export function aboutModal() {
       <div><dt>Versi</dt><dd class="num">${escapeHtml(APP_INFO.version)}</dd></div>
       <div><dt>Dibuka sebagai</dt><dd>${standalone ? 'Aplikasi terpasang' : 'Halaman web'}</dd></div>
       <div><dt>Masuk sebagai</dt><dd>@${escapeHtml(user.username)} (${escapeHtml(ROLE_LABEL[user.role] || user.role)})</dd></div>
-      <div><dt>Dibangun dengan</dt><dd>${escapeHtml(APP_INFO.stack)}</dd></div>
+      ${isCustomer() ? '' : `<div><dt>Dibangun dengan</dt><dd>${escapeHtml(APP_INFO.stack)}</dd></div>`}
     </dl>
     <p class="about-note">Data akun, alamat, dan pesanan disimpan di server toko. Keranjang dan pengaturan tampilan hanya tersimpan di perangkat ini.</p>
     <div class="foot"><button type="button" class="btn primary" data-act="close-modal">Tutup</button></div>`);
@@ -980,6 +980,54 @@ const orderActions = order => (isStaff() ? staffOrderActions(order) : customerOr
 
 const orderPaymentHtml = order => paymentBoxHtml(order, 'Cara bayar');
 
+// Hasil baca otomatis bukti transfer (hanya staf). Selalu berupa saran: keputusan tetap di tangan staf.
+const PROOF_VERDICT = { match: ['ok', 'Cocok'], mismatch: ['err', 'Tidak cocok'], suspicious: ['err', 'Mencurigakan'], unclear: ['warn', 'Perlu dicek'] };
+const PROOF_STATUS = { ok: ['ok', 'Cocok'], bad: ['err', 'Bermasalah'], unknown: ['warn', 'Tidak terbaca'], skip: ['warn', 'Tidak diperiksa'] };
+
+const PROOF_ICON = { ok: 'check', err: 'x', warn: 'info' };
+const PROOF_SORT = { bad: 0, unknown: 1, skip: 2, ok: 3 };   // yang bermasalah tampil paling atas
+
+function proofCheckHtml(order) {
+  const check = order.proof_check;
+  const pending = state.proofReader && order.status === 'pending';
+  const id = escapeHtml(order.id);
+  if (!check) {
+    if (!pending) return '';
+    return `<div class="pc-empty"><p class="proof-note">Bukti ini belum dibaca. Foto akan dikirim ke layanan AI dan hasilnya hanya saran.</p>
+      <button type="button" class="btn sm" data-act="proof-check" data-id="${id}">${icon('search', 14)} Baca dengan AI</button></div>`;
+  }
+  const [tone, label] = PROOF_VERDICT[check.verdict] || PROOF_VERDICT.unclear;
+  // Foto yang bukan bukti transfer: cukup pesan sarannya, deretan "Bermasalah" hanya membingungkan
+  const rows = check.reason === 'not_proof' ? '' : (check.checks || [])
+    .slice().sort((a, b) => (PROOF_SORT[a.status] ?? 1) - (PROOF_SORT[b.status] ?? 1))
+    .map(item => {
+      const [itemTone, itemLabel] = PROOF_STATUS[item.status] || PROOF_STATUS.unknown;
+      const read = item.read == null || item.read === '' ? '—' : item.read;
+      const expected = item.status === 'bad' && item.expected ? `<small class="pc-exp">Seharusnya ${escapeHtml(String(item.expected))}</small>` : '';
+      const note = item.note ? `<small>${escapeHtml(item.note)}</small>` : '';
+      return `<li class="pc-row ${itemTone}"><span class="pc-main"><b>${escapeHtml(item.label)}</b>: ${escapeHtml(String(read))}${expected}${note}</span><span class="pc-tag ${itemTone}">${itemLabel}</span></li>`;
+    }).join('');
+  // Hasil "Perlu dicek" boleh dicoba lagi (mis. bacaan meleset). Hasil yang menentukan tetapi baru dibaca sekali
+  // (waktu unggah tidak cukup untuk bacaan kedua) boleh diverifikasi ulang. Jumlahnya dibatasi server per jam.
+  const unconfirmed = check.verdict !== 'unclear' && check.confirmed === false;
+  const canRetry = pending && (check.verdict === 'unclear' || unconfirmed);
+  const retry = canRetry
+    ? `<button type="button" class="btn sm" data-act="proof-check" data-force="1" data-id="${id}">${icon('search', 14)} ${unconfirmed ? 'Verifikasi ulang' : 'Coba baca lagi'}</button>`
+    : '';
+  const unconfirmedNote = unconfirmed ? '<p class="proof-note">Baru dibaca satu kali. "Verifikasi ulang" membacanya dua kali lalu membandingkan hasilnya.</p>' : '';
+  const meta = [`Keyakinan baca ${Number(check.confidence) || 0}%`];
+  if (check.model) meta.push(escapeHtml(check.model));
+  if (check.read_at) meta.push(`Dibaca ${formatDate(check.read_at)}`);
+  return `<div class="pc" aria-live="polite">
+    <div class="pc-verdict ${tone}"><span class="pc-ic">${icon(PROOF_ICON[tone] || 'info', 16)}</span>
+      <div><b>${label}</b>${check.advice ? `<p>${escapeHtml(check.advice)}</p>` : ''}</div></div>
+    ${rows ? `<ul class="pc-list">${rows}</ul>` : ''}
+    ${unconfirmedNote}
+    <p class="pc-meta">${meta.map(item => `<span>${item}</span>`).join('')}</p>
+    ${retry}
+    <p class="proof-note pc-foot">Hanya saran. Cek mutasi rekening sebelum menandai dibayar.</p></div>`;
+}
+
 // Bukti transfer: pelanggan mengunggah selama pesanan belum dibayar; admin melihatnya untuk mencocokkan dengan mutasi rekening
 function proofBoxHtml(order, canUpload) {
   if (order.payment_method !== 'transfer') return '';
@@ -990,10 +1038,14 @@ function proofBoxHtml(order, canUpload) {
     ? `<a class="proof-img" href="${src}" target="_blank" rel="noopener" aria-label="Buka bukti transfer"><img src="${src}" alt="Bukti transfer ${escapeHtml(order.code)}" loading="lazy"></a>
        <p class="proof-note">Diunggah ${formatDate(order.proof_at)}${canUpload ? '. Admin akan mengecek pembayaran Anda.' : ''}</p>`
     : '<p class="proof-note">Sudah transfer? Unggah foto atau tangkapan layar bukti transfernya supaya admin bisa mengecek.</p>';
+  // Pelanggan diberi tahu sebelum mengunggah bahwa fotonya dibaca layanan AI pihak ketiga
+  const privacy = canUpload && state.proofReader
+    ? `<p class="proof-note">Foto bukti dibaca otomatis oleh layanan AI dari Google untuk membantu admin memeriksa. Hasilnya hanya saran; admin yang memutuskan.${state.proofRetentionDays ? ` Foto dihapus otomatis ${state.proofRetentionDays} hari setelah diunggah.` : ''}</p>`
+    : '';
   const action = canUpload
     ? `<button type="button" class="btn sm" data-act="proof-pick">${has ? 'Ganti bukti' : 'Unggah bukti transfer'}</button><input type="file" accept="image/*" hidden data-proof-input data-id="${escapeHtml(order.id)}">`
     : '';
-  return `<section class="r-proof" aria-label="Bukti transfer"><b class="proof-title">Bukti transfer</b>${image}${action}</section>`;
+  return `<section class="r-proof" aria-label="Bukti transfer"><b class="proof-title">Bukti transfer</b>${image}${privacy}${action}${canUpload ? '' : proofCheckHtml(order)}</section>`;
 }
 
 const orderLineHtml = item =>

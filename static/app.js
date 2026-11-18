@@ -597,7 +597,8 @@ function filterOrders(el) {
   });
 }
 
-// Bukti transfer: foto dikecilkan di browser (sisi terpanjang 1000 px, sekitar 120 KB) lalu dikirim sebagai data URL
+// Bukti transfer: foto dikecilkan di browser (sisi terpanjang 1600 px, sekitar 350 KB) lalu dikirim sebagai data URL.
+// Jangan terlalu kecil: struk berisi angka kecil, dan pada 1000 px angka seperti 3/8 atau 1/7 mudah salah terbaca oleh AI.
 async function uploadProof(input) {
   const file = input.files?.[0];
   const id = input.dataset.id;
@@ -606,9 +607,11 @@ async function uploadProof(input) {
 
   const button = input.closest('.r-proof')?.querySelector('[data-act="proof-pick"]');
   const label = button?.textContent;
-  if (button) { button.disabled = true; button.textContent = 'Mengunggah…'; }
+  const busy = text => { if (button) { button.disabled = true; button.classList.add('reading'); button.innerHTML = `<i class="spin" aria-hidden="true"></i> ${text}`; } };
+  busy('Menyiapkan foto…');
   try {
-    const image = await compressImage(file, { side: 1000, target: 120 * 1024, limit: 200 * 1024 });
+    const image = await compressImage(file, { side: 1600, target: 350 * 1024, limit: 480 * 1024 });
+    busy('Mengunggah…');
     const { order } = await api(`/orders/${id}/proof`, { method: 'POST', body: { image } });
     const index = state.orders.findIndex(item => item.id === id);
     if (index >= 0) state.orders[index] = order;
@@ -617,13 +620,70 @@ async function uploadProof(input) {
     if (state.view === 'orders' && $('#olist')) $('#olist').innerHTML = orderCards();
   } catch (err) {
     toast(err.fields?.image || err.message, 'err');
-    if (button && button.isConnected) { button.disabled = false; button.textContent = label; }
+    if (button && button.isConnected) { button.disabled = false; button.classList.remove('reading'); button.textContent = label; }
   }
+}
+
+// Staf: baca ulang bukti transfer secara manual (cadangan bila pembacaan saat unggah gagal). Hasilnya saran saja.
+async function checkProof(el) {
+  const id = el.dataset.id;
+  if (!id || el.disabled) return;
+  const label = el.innerHTML;
+  const box = el.closest('.r-proof');
+  box?.querySelector('.proof-error')?.remove();
+  // Pembacaan AI bisa makan puluhan detik: tampilkan penghitung waktu supaya staf tahu proses masih berjalan
+  let seconds = 0;
+  const paint = () => {
+    el.innerHTML = `<i class="spin" aria-hidden="true"></i> Membaca bukti… ${seconds} dtk`;
+  };
+  el.disabled = true;
+  el.classList.add('reading');
+  paint();
+  const timer = setInterval(() => { seconds += 1; if (el.isConnected) paint(); }, 1000);
+  try {
+    const { order } = await api(`/orders/${id}/proof/check`, { method: 'POST', body: el.dataset.force ? { force: true } : {} });
+    const index = state.orders.findIndex(item => item.id === id);
+    if (index >= 0) state.orders[index] = order;
+    if ($(`#modal-root [data-order="${id}"]`)) orderDetailModal(order);
+    if (state.view === 'orders' && $('#olist')) $('#olist').innerHTML = orderCards();
+    toast('Bukti selesai dibaca', 'ok');
+  } catch (err) {
+    // Pesan galat ditaruh di kotak bukti (toast hilang sendiri), tombol berubah menjadi "Coba lagi"
+    if (el.isConnected) {
+      el.disabled = false;
+      el.classList.remove('reading');
+      el.innerHTML = `${icon('search', 14)} Coba lagi`;
+      const note = document.createElement('p');
+      note.className = 'proof-error';
+      note.setAttribute('role', 'alert');
+      note.textContent = err.message;
+      el.before(note);
+    } else {
+      toast(err.message, 'err');
+    }
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+// Pembacaan AI saat unggah sering tidak sempat selesai (model butuh beberapa detik). Karena itu, begitu staf membuka pesanan
+// yang ada buktinya tetapi belum terbaca, bukti langsung dibaca di sini. Sekali per pesanan per sesi supaya kegagalan tidak
+// berulang; bila gagal, tombol "Coba lagi" di kotak bukti tetap bisa dipakai.
+const autoReadTried = new Set();
+function autoReadProof(order) {
+  if (!order || !state.proofReader || !isStaff()) return;
+  if (order.status !== 'pending' || !order.proof_at || order.proof_check || autoReadTried.has(order.id)) return;
+  const button = $(`#modal-root [data-order="${order.id}"] [data-act="proof-check"]`);
+  if (!button) return;
+  autoReadTried.add(order.id);
+  checkProof(button);
 }
 
 function openOrder(el) {
   const order = state.orders.find(item => item.id === el.dataset.id);
-  if (order) orderDetailModal(order);
+  if (!order) return;
+  orderDetailModal(order);
+  autoReadProof(order);
 }
 
 async function deleteOrder(el) {
@@ -1152,6 +1212,7 @@ const actions = {
   'prod-reset': resetProductFilter,
   'photo-pick': el => choosePhoto(el.closest('form')),
   'proof-pick': el => el.closest('.r-proof')?.querySelector('[data-proof-input]')?.click(),
+  'proof-check': checkProof,
   'photo-clear': el => clearPhoto(el.closest('form')),
 
   'user-new': userModal,
@@ -1649,6 +1710,16 @@ function initShopScroll() {
 
   addEventListener('scroll', () => { if (!frame) frame = requestAnimationFrame(update); }, { passive: true });
   document.addEventListener('scroll', e => { if (e.target.id === 'rail') updateRailEdges(); }, true);
+  // Foto bukti yang sudah dihapus sesuai masa simpan: ganti gambar rusak dengan keterangan
+  document.addEventListener('error', e => {
+    const img = e.target;
+    const link = img instanceof HTMLImageElement ? img.closest('.proof-img') : null;
+    if (!link) return;
+    const note = document.createElement('p');
+    note.className = 'proof-note';
+    note.textContent = 'Foto bukti tidak tersedia (mungkin sudah dihapus sesuai masa simpan).';
+    link.replaceWith(note);
+  }, true);
 }
 
 function bindEvents() {
@@ -1732,6 +1803,8 @@ async function boot() {
     state.qrisMinutes = Number(me.qris_minutes) || 60;
     state.ewalletMinutes = me.ewallet_minutes || {};
     state.ewalletOn = Boolean(me.ewallet_enabled);
+    state.proofReader = Boolean(me.proof_reader);
+    state.proofRetentionDays = Number(me.proof_retention_days) || 0;
     if (me.server_time) state.clockSkew = Date.parse(me.server_time) - Date.now();
     state.shipping = { fee: Number(me.shipping?.fee) || 0, freeMin: Number(me.shipping?.free_min) || 0 };
     state.resetEnabled = Boolean(me.reset_enabled);

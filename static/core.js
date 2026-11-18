@@ -206,6 +206,8 @@ export const state = {
   payInfo: '',
   dummyQris: false,
   ewalletOn: false,
+  proofReader: false,
+  proofRetentionDays: 0,
   qrisMinutes: 60,
   ewalletMinutes: {},
   clockSkew: 0,
@@ -411,7 +413,7 @@ export async function api(path, { method = 'GET', body, headers } = {}) {
   try {
     response = await fetch('/api' + path, options);
   } catch {
-    throw createError('Tidak dapat terhubung ke server', { status: 0 });
+    throw createError('Tidak ada sambungan internet, atau toko sedang sulit dihubungi. Coba lagi.', { status: 0 });
   }
 
   let data = {};

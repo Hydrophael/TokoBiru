@@ -67,6 +67,8 @@ from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from proof_reader import ProofReadError, evaluate_proof, proof_fingerprint, read_transfer_proof
+
 IS_VERCEL = bool(os.environ.get("VERCEL"))
 
 if not IS_VERCEL:
@@ -85,6 +87,19 @@ def _env_str(name, default="", strip=True):
 
 
 PAY_INFO = _env_str("PAY_INFO")[:200]
+# Baca bukti transfer otomatis oleh Gemini (saran untuk staf, bukan pengganti cek mutasi). Aktif bila GEMINI_API_KEY diisi.
+GEMINI_API_KEY = _env_str("GEMINI_API_KEY")
+PROOF_READER_MODEL = _env_str("PROOF_READER_MODEL", "gemini-3.5-flash-lite")
+# Model cadangan bila model utama sibuk (HTTP 503) atau kuotanya habis (429). Kosongkan untuk mematikan cadangan.
+PROOF_READER_FALLBACK_MODEL = _env_str("PROOF_READER_FALLBACK_MODEL", "gemini-3.1-flash-lite")
+# Ciri rekening tujuan yang benar: 4 digit terakhir dan/atau nama pemilik, pisahkan dengan koma. Kosong = tujuan tidak diperiksa
+PROOF_BANK_HINT = _env_str("PROOF_BANK_HINT")[:100]
+PROOF_READER_ENABLED = bool(GEMINI_API_KEY)
+# Batas pembacaan AI per akun per jam, supaya kuota/biaya tidak habis oleh unggah ulang berulang-ulang
+PROOF_AUTO_READS_PER_HOUR = 10    # pelanggan (baca otomatis saat unggah; unggahan tetap berhasil walau kuota habis)
+PROOF_STAFF_READS_PER_HOUR = 60   # staf (tombol baca manual)
+PROOF_VERDICT_TEXT = {"match": "Cocok", "mismatch": "Tidak cocok", "suspicious": "Mencurigakan", "unclear": "Perlu dicek"}
+SYSTEM_ACTOR = {"username": "sistem", "role": "-"}
 # QRIS asli lewat Xendit. Bila key diisi, QRIS simulasi dimatikan supaya tidak ada jalan pintas "bayar gratis".
 XENDIT_SECRET_KEY = _env_str("XENDIT_SECRET_KEY")
 XENDIT_CALLBACK_TOKEN = _env_str("XENDIT_CALLBACK_TOKEN")
@@ -107,7 +122,7 @@ if not SECRET_KEY:
     SECRET_KEY = "dev-only-secret-ganti-di-produksi"
 
 MAX_JSON_BYTES = 64 * 1024
-MAX_PRODUCT_BODY_BYTES = 512 * 1024
+MAX_PRODUCT_BODY_BYTES = 1024 * 1024   # foto bukti transfer lebih besar (lihat PROOF_IMAGE_MAX_CHARS)
 PRODUCT_WRITE_RE = re.compile(r"/api/products(?:/[0-9a-fA-F]{24})?")
 PROFILE_WRITE_RE = re.compile(r"/api/auth/profile")
 PROOF_WRITE_RE = re.compile(r"/api/orders/[0-9a-fA-F]{24}/proof")
@@ -151,6 +166,20 @@ def _env_int(name, default, minimum=1):
 
 PENDING_TTL_HOURS = _env_int("PENDING_TTL_HOURS", 24)
 QRIS_TTL_MINUTES = _env_int("QRIS_TTL_MINUTES", 60)
+# Akurasi baca bukti: hasil yang menentukan dibaca dua kali oleh model berbeda dan baru dipercaya bila keduanya sama
+PROOF_CONFIRM_READ = _env_str("PROOF_CONFIRM_READ", "1").lower() not in ("0", "false", "off", "tidak")
+PROOF_CONFIRM_MIN_SECONDS = 3                                  # sisa waktu minimal agar bacaan kedua dicoba (saat unggah)
+# Foto bukti berisi nama dan nomor rekening: dihapus otomatis sekian hari setelah diunggah (TTL MongoDB)
+PROOF_RETENTION_DAYS = _env_int("PROOF_RETENTION_DAYS", 90)
+# Unggah/ganti foto bukti per akun per jam. Terpisah dari batas pembacaan AI: ini melindungi penyimpanan dan beban server
+PROOF_UPLOADS_PER_HOUR = 15
+# Saat unggah, pembacaan dibatasi lebih pendek supaya unggahan pelanggan tidak kena batas waktu fungsi serverless.
+# Pembacaan yang tidak sempat selesai tidak menggagalkan unggahan: admin membacanya saat membuka pesanan.
+PROOF_UPLOAD_TIMEOUT = _env_int("PROOF_UPLOAD_TIMEOUT", 6, 3)
+PROOF_STAFF_TIMEOUT = _env_int("PROOF_STAFF_TIMEOUT", 20, 5)   # tombol baca manual: berpikir lebih teliti, perlu waktu lebih
+if PROOF_READER_ENABLED and not PROOF_BANK_HINT:
+    print("PERINGATAN: GEMINI_API_KEY aktif tetapi PROOF_BANK_HINT kosong; rekening tujuan pada bukti transfer TIDAK diperiksa.",
+          file=sys.stderr)
 # Batas bayar tiap e-wallet (menit). Idealnya tidak lebih pendek dari umur tagihan di Xendit (ShopeePay 30 menit, DANA 24 jam),
 # supaya tidak ada pembayaran masuk ke pesanan yang sudah dibatalkan. OVO mengabari Xendit saat tagihannya habis.
 EWALLET_TTL_MINUTES = {
@@ -237,6 +266,18 @@ def ensure_unique_order_code_index(db):
         app.logger.error("Indeks unik orders.code gagal dibuat (ada kode ganda di data lama?): %s", exc)
 
 
+def ensure_ttl_index(coll, field, days, name):
+    """Indeks TTL (dokumen terhapus otomatis `days` hari setelah `field`). Bila lama simpan diubah lewat .env, indeks lama diperbarui."""
+    seconds = days * 86400
+    try:
+        coll.create_index([(field, ASCENDING)], expireAfterSeconds=seconds, name=name)
+    except OperationFailure:
+        try:
+            coll.database.command("collMod", coll.name, index={"name": name, "expireAfterSeconds": seconds})
+        except PyMongoError as exc:
+            app.logger.error("Indeks TTL %s gagal diperbarui: %s", name, exc)
+
+
 def ensure_indexes(db):
     db.users.create_index([("username", ASCENDING)], unique=True)
     db.users.create_index([("email", ASCENDING)], unique=True)
@@ -260,6 +301,10 @@ def ensure_indexes(db):
     db.logs.create_index([("ts", ASCENDING)], expireAfterSeconds=LOG_RETENTION_DAYS * 86400, name="logs_ttl")
     db.rate_limits.create_index([("expires", ASCENDING)], expireAfterSeconds=0, name="rate_ttl")
     db.push_subs.create_index([("user_id", ASCENDING)])
+    db.order_proofs.create_index([("sha256", ASCENDING)])
+    ensure_ttl_index(db.order_proofs, "uploaded_at", PROOF_RETENTION_DAYS, "proof_ttl")
+    db.orders.create_index([("proof_check.reference", ASCENDING)], sparse=True)
+    db.orders.create_index([("proof_check.fingerprint", ASCENDING)], sparse=True)
     db.notifications.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
     db.notifications.create_index([("created_at", ASCENDING)], expireAfterSeconds=30 * 86400, name="notif_ttl")
 
@@ -313,7 +358,7 @@ def handle_405(e):
 
 @app.errorhandler(413)
 def handle_413(e):
-    return jsonify({"error": "Data terlalu besar"}), 413
+    return jsonify({"error": "Data yang dikirim terlalu besar"}), 413
 
 
 @app.errorhandler(Exception)
@@ -378,11 +423,12 @@ def is_strong_password(password):
 
 
 IMAGE_MAX_CHARS = 300_000
+PROOF_IMAGE_MAX_CHARS = 700_000   # bukti transfer: angka kecil di struk butuh resolusi lebih tinggi daripada foto produk
 IMAGE_RE = re.compile(r"data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})")
 
 
-def decode_image(raw):
-    if len(raw) > IMAGE_MAX_CHARS:
+def decode_image(raw, max_chars=IMAGE_MAX_CHARS):
+    if len(raw) > max_chars:
         raise ValueError("Foto terlalu besar. Pilih foto lain.")
     match = IMAGE_RE.fullmatch(raw)
     if not match:
@@ -463,7 +509,7 @@ class Form:
         else:
             self.out[name] = number
 
-    def image(self, name="image", label="Foto"):
+    def image(self, name="image", label="Foto", max_chars=IMAGE_MAX_CHARS):
         if name not in self.data:
             return
         raw = self.data[name]
@@ -474,7 +520,7 @@ class Form:
             self.errors[name] = f"{label} tidak valid"
             return
         try:
-            self.out[name] = decode_image(raw)
+            self.out[name] = decode_image(raw, max_chars)
         except ValueError as exc:
             self.errors[name] = str(exc)
 
@@ -494,7 +540,7 @@ class Form:
 def json_body():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
-        raise ApiError("Body JSON tidak valid", 400)
+        raise ApiError("Data yang dikirim tidak terbaca. Muat ulang halaman lalu coba lagi.", 400)
     return data
 
 
@@ -552,6 +598,7 @@ def order_json(order, user=None):
     if not (user and user["role"] in STAFF_ROLES):
         out.pop("needs_refund", None)
         out.pop("payment_issue", None)
+        out.pop("proof_check", None)   # hasil baca bukti hanya untuk staf
     return out
 
 
@@ -693,6 +740,11 @@ def rate_limit(bucket):
         raise ApiError("Terlalu banyak percobaan dari jaringan Anda. Coba lagi beberapa menit lagi.", 429)
 
 
+def proof_read_quota(user, limit):
+    """True bila akun ini masih boleh memakai pembacaan AI pada jam ini. Setiap pemanggilan dihitung."""
+    return _hit(f"rl:proof:{user['_id']}", 3600) <= limit
+
+
 # Penguncian login per akun + IP: penebak hanya mengunci dirinya sendiri, pemilik akun dari jaringan lain tetap bisa masuk
 def login_locked(user, ip):
     return _count(f"lf:{user['_id']}:{ip}") >= MAX_FAILED_LOGIN
@@ -770,11 +822,11 @@ def guard():
                       (request.method == "PATCH" and PROFILE_WRITE_RE.fullmatch(request.path)) or \
                       (request.method == "POST" and PROOF_WRITE_RE.fullmatch(request.path))
         if too_big and not photo_write:
-            raise ApiError("Data terlalu besar", 413)
+            raise ApiError("Data yang dikirim terlalu besar", 413)
         if not csrf_token_valid():
-            raise ApiError("Token keamanan tidak valid. Muat ulang halaman.", 403)
+            raise ApiError("Sesi Anda sudah berakhir atau halaman terlalu lama terbuka. Muat ulang halaman lalu coba lagi.", 403)
         if not request.is_json:
-            raise ApiError("Content-Type harus application/json", 415)
+            raise ApiError("Permintaan tidak bisa diproses. Muat ulang halaman lalu coba lagi.", 415)
 
 
 @app.after_request
@@ -939,7 +991,7 @@ def push_subscribe():
     keys = keys if isinstance(keys, dict) else {}
     endpoint, p256dh, auth = (sub or {}).get("endpoint") if isinstance(sub, dict) else None, keys.get("p256dh"), keys.get("auth")
     if not isinstance(endpoint, str) or not push_endpoint_ok(endpoint) or not all(isinstance(k, str) and PUSH_KEY_RE.fullmatch(k) for k in (p256dh, auth)):
-        raise ApiError("Langganan notifikasi tidak valid", 422)
+        raise ApiError("Notifikasi tidak bisa diaktifkan di perangkat ini.", 422)
     db = get_db()
     user = current_user()
     sub_id = hashlib.sha256(endpoint.encode()).hexdigest()
@@ -992,7 +1044,7 @@ def notifications_read():
     else:
         ids = body.get("ids")
         if not isinstance(ids, list) or not ids or len(ids) > 50:
-            raise ApiError("Daftar notifikasi tidak valid", 400)
+            raise ApiError("Notifikasi tidak dapat diproses. Muat ulang halaman lalu coba lagi.", 400)
         db.notifications.update_many({"_id": {"$in": [object_id(item, "Notifikasi") for item in ids]}, "user_id": uid},
                                      {"$set": {"read": True}})
     return jsonify({"ok": True})
@@ -1029,7 +1081,7 @@ def auth_me():
         session["csrf"] = secrets.token_urlsafe(32)
     return jsonify({"user": public_user(user), "csrf": session["csrf"], "pay_info": PAY_INFO,
                     "dummy_qris": DUMMY_QRIS, "qris_enabled": QRIS_ENABLED, "ewallet_enabled": XENDIT_ENABLED, "qris_minutes": QRIS_TTL_MINUTES,
-                    "ewallet_minutes": EWALLET_TTL_MINUTES,
+                    "ewallet_minutes": EWALLET_TTL_MINUTES, "proof_reader": PROOF_READER_ENABLED, "proof_retention_days": PROOF_RETENTION_DAYS,
                     "server_time": utcnow().isoformat() + "Z", "reset_enabled": EMAIL_ENABLED,
                     "shipping": {"fee": SHIPPING_FEE, "free_min": FREE_SHIPPING_MIN}})
 
@@ -1749,7 +1801,7 @@ def idempotency_key():
     if not raw:
         return None
     if not IDEMPOTENCY_KEY_RE.fullmatch(raw):
-        raise ApiError("Idempotency-Key tidak valid", 422)
+        raise ApiError("Permintaan tidak valid. Muat ulang halaman lalu coba lagi.", 422)
     return raw
 
 
@@ -1760,7 +1812,7 @@ def replayed_order(db, user, key, wanted):
     if order is None:
         return None
     if {item["product_id"]: item["qty"] for item in order["items"]} != wanted:
-        raise ApiError("Kunci permintaan ini sudah dipakai untuk pesanan yang berbeda", 422)
+        raise ApiError("Isi keranjang berubah saat pesanan dikirim. Muat ulang halaman lalu coba lagi.", 422)
     return order
 
 
@@ -1887,6 +1939,7 @@ def drop_unpayable_order(db, order, reason=""):
     # Pesanan dihapus (bukan dibatalkan) supaya percobaan ulang dengan Idempotency-Key yang sama tidak mengembalikan pesanan mati
     if db.orders.delete_one({"_id": order["_id"], "status": "pending"}).deleted_count:
         release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
+        db.order_proofs.delete_one({"_id": order["_id"]})   # foto bukti tidak ditinggalkan tanpa pesanan
         # Alasan dari Xendit (tanpa kunci rahasia) ikut dicatat supaya admin bisa melihatnya di halaman Log
         audit("pesanan_gagal_gateway", f"{order['code']} {reason}".strip()[:240], {"username": "sistem", "role": "-"})
 
@@ -2100,18 +2153,39 @@ def order_proof_upload(order_id):
     order = settle_overdue(db, order)
     if order["status"] != "pending":
         raise ApiError("Bukti hanya bisa diunggah selama pesanan belum dibayar", 409)
+    if _hit(f"rl:proofup:{user['_id']}", 3600) > PROOF_UPLOADS_PER_HOUR:
+        raise ApiError("Terlalu banyak unggahan bukti dalam satu jam. Coba lagi nanti.", 429)
     form = Form(json_body())
-    form.image("image", "Bukti transfer")
+    form.image("image", "Bukti transfer", PROOF_IMAGE_MAX_CHARS)
     clean = form.done()
     if not clean.get("image"):
         raise ApiError("Periksa kembali isian Anda", 422, {"image": "Pilih foto bukti transfer"})
     data, mime = clean["image"]
     now = utcnow()
+    # Berapa kali foto bukti pesanan ini diunggah/diganti: mengulang sampai AI "setuju" adalah tanda mencurigakan
+    previous = db.order_proofs.find_one({"_id": order["_id"]}, {"revision": 1})
+    revision = (previous.get("revision") or 1) + 1 if previous else 1
     db.order_proofs.replace_one({"_id": order["_id"]},
-                                {"_id": order["_id"], "image": data, "type": mime, "uploaded_at": now}, upsert=True)
-    db.orders.update_one({"_id": order["_id"], "status": "pending"}, {"$set": {"proof_at": now, "updated_at": now}})
+                                {"_id": order["_id"], "image": data, "type": mime, "uploaded_at": now,
+                                 "sha256": hashlib.sha256(bytes(data)).hexdigest(), "revision": revision}, upsert=True)
+    # Foto baru: hasil baca foto lama tidak berlaku lagi
+    db.orders.update_one({"_id": order["_id"], "status": "pending"},
+                         {"$set": {"proof_at": now, "updated_at": now}, "$unset": {"proof_check": ""}})
+    order = db.orders.find_one({"_id": order["_id"]})   # ambil ulang: Mongo menyimpan waktu dengan ketelitian milidetik
     audit("bukti_transfer", order["code"])
-    push_staff("Bukti transfer masuk", f"{order['code']} · {format_rupiah(order['total'])}. Cek dan tandai dibayar.",
+
+    # Baca otomatis saat unggah. Kegagalan AI tidak boleh menggagalkan unggahan: staf masih punya tombol manual.
+    verdict_note = ""
+    if PROOF_READER_ENABLED and order.get("proof_at") and proof_read_quota(user, PROOF_AUTO_READS_PER_HOUR):
+        try:
+            result = analyze_proof(db, order, {"image": data, "type": mime, "revision": revision}, SYSTEM_ACTOR,
+                                    timeout=PROOF_UPLOAD_TIMEOUT)
+            verdict_note = f" · {PROOF_VERDICT_TEXT.get(result['verdict'], 'Perlu dicek')} ({result['confidence']}%)"
+        except Exception as exc:
+            app.logger.warning("Baca otomatis saat unggah gagal (%s): %s", order["code"], str(exc)[:200])
+
+    push_staff("Bukti transfer masuk",
+               f"{order['code']} · {format_rupiah(order['total'])}{verdict_note}. Cocokkan dengan mutasi, lalu tandai dibayar.",
                f"order-{order['code']}-bukti")
     return jsonify({"order": order_json(db.orders.find_one({"_id": order["_id"]}), user)})
 
@@ -2132,6 +2206,151 @@ def order_proof_view(order_id):
     resp.headers["Cache-Control"] = "private, no-store"
     resp.headers["Content-Disposition"] = "inline"
     return resp
+
+
+def proof_is_reused(db, order_id, digest, reference, fingerprint=None):
+    # Foto yang sama persis, nomor referensi transfer yang sama, atau (bila referensi tak terbaca) nominal+menit yang sama
+    # sudah dipakai di pesanan lain. Sidik jari nominal+menit menangkap struk yang sama dengan byte berbeda (disimpan ulang,
+    # dipotong, tangkapan layar dari tangkapan layar) yang lolos dari pemeriksaan sha256.
+    if db.order_proofs.find_one({"sha256": digest, "_id": {"$ne": order_id}}, {"_id": 1}):
+        return True
+    if reference and len(reference) >= 6:
+        return bool(db.orders.find_one({"proof_check.reference": reference, "_id": {"$ne": order_id}}, {"_id": 1}))
+    if fingerprint:
+        return bool(db.orders.find_one({"proof_check.fingerprint": fingerprint, "_id": {"$ne": order_id}}, {"_id": 1}))
+    return False
+
+
+def read_proof_model(image, mime, model, timeout, thinking):
+    """Satu pembacaan oleh satu model. Sebagian model (mis. varian lite) menolak tingkat berpikir "medium" dengan HTTP 400:
+    bukan alasan menggagalkan pembacaan, jadi diulang sekali dengan "low" dalam sisa waktu yang sama."""
+    started = time.monotonic()
+    try:
+        return read_transfer_proof(image, mime, GEMINI_API_KEY, model, timeout=timeout, thinking=thinking)
+    except ProofReadError as exc:
+        left = timeout - (time.monotonic() - started)
+        if exc.status == 400 and thinking != "low" and left >= 2:
+            app.logger.warning("Model %s menolak thinking=%s (400), diulang dengan low", model, thinking)
+            return read_transfer_proof(image, mime, GEMINI_API_KEY, model, timeout=left, thinking="low")
+        raise
+
+
+def read_with_fallback(image, mime, timeout, thinking):
+    """Baca dengan model utama; bila server AI sibuk (503/429/5xx) atau kena batas waktu coba model cadangan dalam sisa waktu yang sama.
+    Mengembalikan (hasil_baca, nama_model_yang_dipakai). Galat selain itu (kunci salah, foto ditolak, dll.) tidak dicoba ulang."""
+    started = time.monotonic()
+    models = [PROOF_READER_MODEL]
+    if PROOF_READER_FALLBACK_MODEL and PROOF_READER_FALLBACK_MODEL != PROOF_READER_MODEL:
+        models.append(PROOF_READER_FALLBACK_MODEL)
+    last = None
+    # Model utama tidak boleh menghabiskan seluruh waktu: bila ada cadangan dan waktunya longgar (baca manual staf),
+    # sisakan sepertiganya supaya batas waktu pada model utama tetap bisa diselamatkan model cadangan
+    primary_timeout = timeout * 0.65 if len(models) > 1 and timeout >= 12 else timeout
+    for index, model in enumerate(models):
+        left = timeout - (time.monotonic() - started)
+        if index and left < 2:
+            break
+        attempt_started = time.monotonic()
+        try:
+            reading = read_proof_model(image, mime, model, left if index else primary_timeout, thinking)
+            took = time.monotonic() - attempt_started
+            if took > 5:   # petunjuk untuk menyetel batas waktu dan model: pembacaan selambat ini patut dicatat
+                app.logger.warning("Model %s butuh %.1f dtk untuk membaca bukti (thinking=%s)", model, took, thinking)
+            return reading, model
+        except ProofReadError as exc:
+            last = exc
+            if not exc.retryable:
+                break
+            app.logger.warning("Model %s sibuk (%s)%s", model, exc,
+                               ", mencoba model cadangan" if index + 1 < len(models) else "")
+    raise last
+
+
+def confirm_reading(image, mime, first_model, started, timeout, thinking):
+    """Bacaan kedua atas foto yang sama, oleh model LAIN bila ada (bila tidak, model yang sama), untuk dibandingkan dengan
+    bacaan pertama. Mengembalikan None bila waktu tidak cukup atau gagal: hasil tetap dipakai, hanya ditandai belum terkonfirmasi."""
+    other = [m for m in (PROOF_READER_MODEL, PROOF_READER_FALLBACK_MODEL) if m and m != first_model]
+    model = other[0] if other else first_model
+    left = timeout - (time.monotonic() - started)
+    if left < PROOF_CONFIRM_MIN_SECONDS:
+        return None
+    try:
+        return read_proof_model(image, mime, model, left, thinking)
+    except ProofReadError as exc:
+        app.logger.warning("Bacaan kedua (%s) gagal: %s", model, str(exc)[:200])
+        return None
+
+
+def analyze_proof(db, order, proof, actor, timeout=8, deep=False):
+    """Baca foto bukti lewat AI, nilai dengan aturan biasa, simpan hasilnya di pesanan, lalu kembalikan.
+    Dipakai oleh unggahan pelanggan (otomatis, cepat) dan tombol staf (manual, deep=True: berpikir lebih teliti).
+    Hasil yang menentukan (cocok / tidak cocok / mencurigakan) dibaca dua kali oleh model berbeda; bila keduanya tidak sama,
+    hasilnya diturunkan menjadi "Perlu dicek". Melempar ProofReadError bila AI gagal."""
+    image = bytes(proof["image"])
+    mime = proof.get("type") or "image/jpeg"
+    thinking = "medium" if deep else "low"
+    started = time.monotonic()
+    reading, model_used = read_with_fallback(image, mime, timeout, thinking)
+    digest = hashlib.sha256(image).hexdigest()
+    now = utcnow()
+    fingerprint = proof_fingerprint(reading)
+    duplicate = proof_is_reused(db, order["_id"], digest, reading["reference"],
+                                fingerprint if not reading["reference"] else None)
+    rules = dict(total=order["total"], created_at=order["created_at"], now=now, bank_hint=PROOF_BANK_HINT,
+                 duplicate=duplicate, uploaded_at=order["proof_at"], revision=proof.get("revision") or 1)
+    result = evaluate_proof(reading, **rules)
+    if PROOF_CONFIRM_READ and result["verdict"] != "unclear":
+        second = confirm_reading(image, mime, model_used, started, timeout, thinking)
+        if second is not None:
+            result = evaluate_proof(reading, second=second, **rules)
+    if not PROOF_CONFIRM_READ:
+        result["confirmed"] = None   # bacaan kedua dimatikan: bukan "gagal dikonfirmasi", jadi tidak ada tombol verifikasi ulang
+    result.update(proof_at=order["proof_at"], read_at=now, model=model_used)
+    db.order_proofs.update_one({"_id": order["_id"]}, {"$set": {"sha256": digest}})   # melengkapi bukti lama
+    db.orders.update_one({"_id": order["_id"], "proof_at": order["proof_at"]}, {"$set": {"proof_check": result}})
+    unconfirmed = result["confirmed"] is False and result["verdict"] != "unclear"
+    audit("bukti_dibaca", f"{order['code']}: {result['verdict']}" + (" (belum terkonfirmasi)" if unconfirmed else ""), actor)
+    return result
+
+
+@app.post("/api/orders/<order_id>/proof/check")
+@roles_required(*STAFF_ROLES)
+def order_proof_check(order_id):
+    # Cadangan manual: dipakai bila pembacaan saat unggah gagal, atau untuk bukti lama yang diunggah sebelum fitur ada
+    if not PROOF_READER_ENABLED:
+        raise ApiError("Pembacaan otomatis belum diaktifkan", 503)
+    db = get_db()
+    user = current_user()
+    order = db.orders.find_one({"_id": object_id(order_id, "Pesanan")})
+    if not order or order.get("payment_method") != "transfer":
+        raise ApiError("Pesanan tidak ditemukan", 404)
+    proof = db.order_proofs.find_one({"_id": order["_id"]})
+    if not proof or not order.get("proof_at"):
+        raise ApiError("Belum ada bukti transfer untuk dibaca", 404)
+    cached = order.get("proof_check")
+    body = request.get_json(silent=True)
+    # Boleh dicoba lagi: hasil "Perlu dicek", atau hasil yang menentukan tetapi belum terkonfirmasi bacaan kedua
+    # (confirmed None = bacaan kedua dimatikan atau hasil lama sebelum fitur ini: bukan alasan untuk membaca ulang)
+    retryable = bool(cached) and (cached.get("verdict") == "unclear" or
+                                  (PROOF_CONFIRM_READ and cached.get("confirmed") is False))
+    retry = isinstance(body, dict) and body.get("force") is True and retryable
+    if cached and cached.get("proof_at") == order["proof_at"] and not retry:
+        return jsonify({"order": order_json(order, user)})   # foto ini sudah dibaca: tidak memanggil AI lagi
+    # Pembacaan ulang (force) tetap dihitung dalam batas baca per jam
+    if not proof_read_quota(user, PROOF_STAFF_READS_PER_HOUR):
+        raise ApiError("Terlalu banyak pembacaan dalam satu jam. Coba lagi nanti atau cek manual.", 429)
+    try:
+        analyze_proof(db, order, proof, user, timeout=PROOF_STAFF_TIMEOUT, deep=True)
+    except ProofReadError as exc:
+        app.logger.error("Baca bukti %s gagal: %s", order["code"], exc)
+        if exc.status == 429:
+            raise ApiError("Kuota layanan AI sedang habis. Tunggu beberapa menit, atau cek manual.", 502)
+        if exc.transient:
+            raise ApiError("Layanan AI terlalu lama menjawab. Coba lagi, atau cek manual.", 502)
+        if exc.retryable:
+            raise ApiError("Layanan AI sedang sibuk. Coba lagi beberapa saat lagi, atau cek manual.", 502)
+        raise ApiError("Bukti belum bisa dibaca otomatis. Cek manual.", 502)
+    return jsonify({"order": order_json(db.orders.find_one({"_id": order["_id"]}), user)})
 
 
 _last_ewallet_sync = {}
@@ -2447,8 +2666,13 @@ def users_delete(user_id):
     if target["_id"] == current_user()["_id"] or target["role"] == "master":
         raise ApiError("Akun master tidak dapat dihapus", 403)
     freed = cancel_pending_orders(db, target_id, "account_deleted")
+    # Pesanan tetap disimpan untuk pembukuan, tetapi foto bukti (nama, nomor rekening) ikut dihapus bersama akunnya
+    order_ids = [order["_id"] for order in db.orders.find({"user_id": target_id}, {"_id": 1})]
+    photos = db.order_proofs.delete_many({"_id": {"$in": order_ids}}).deleted_count if order_ids else 0
     db.users.delete_one({"_id": target_id})
-    audit("user_hapus", target["username"] + (f" ({freed} pesanan belum dibayar dibatalkan)" if freed else ""))
+    audit("user_hapus", target["username"]
+          + (f" ({freed} pesanan belum dibayar dibatalkan)" if freed else "")
+          + (f" ({photos} foto bukti dihapus)" if photos else ""))
     return jsonify({"ok": True})
 
 
