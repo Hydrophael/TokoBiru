@@ -42,3 +42,6 @@ Thumbs.db
 *.log
 
 README.md
+packed/
+test_receipts/
+*.bak
