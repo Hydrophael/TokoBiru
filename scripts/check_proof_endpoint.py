@@ -1,4 +1,4 @@
-"""Uji endpoint /proof/check dengan Flask test client + MongoDB tiruan. Jalankan dari folder proyek: pip install mongomock lalu python test_proof_endpoint.py (pemanggilan AI di-mock, tidak memakai kunci asli)."""
+"""Uji endpoint /proof/check dengan Flask test client + MongoDB tiruan. Jalankan dari folder proyek: pip install mongomock lalu python scripts/check_proof_endpoint.py (pemanggilan AI di-mock, tidak memakai kunci asli)."""
 import os, sys, json
 from datetime import datetime, timedelta
 from unittest import mock

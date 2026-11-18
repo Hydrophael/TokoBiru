@@ -1,4 +1,4 @@
-"""Tes untuk proof_reader.py. Jalankan: python -m unittest -v test_proof_reader   (atau: pytest)"""
+"""Tes untuk tokobiru/proof_reader.py. Jalankan: pytest tests/test_proof_reader.py"""
 import io
 import json
 import unittest
@@ -6,7 +6,7 @@ import urllib.error
 from datetime import datetime, timedelta
 from unittest import mock
 
-import proof_reader as pr
+from tokobiru import proof_reader as pr
 
 # Pesanan contoh: dibuat 16 Nov 2026 14:05 WIB = 07:05 UTC, total Rp87.500
 CREATED = datetime(2026, 11, 16, 7, 5)

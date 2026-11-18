@@ -67,7 +67,7 @@ from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from proof_reader import ProofReadError, evaluate_proof, proof_fingerprint, read_transfer_proof
+from tokobiru.proof_reader import ProofReadError, evaluate_proof, proof_fingerprint, read_transfer_proof
 
 from tokobiru.config import *  # noqa: F401,F403,E402  (sementara: nama-nama lama tetap bisa dipakai di sini)
 from tokobiru.config import _env_int, _env_str  # noqa: F401,E402
