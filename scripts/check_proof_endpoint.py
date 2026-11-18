@@ -13,7 +13,7 @@ _Bulk.add_update = lambda self, *a, sort=None, **k: _add_update(self, *a, **k)
 from bson import ObjectId
 from werkzeug.security import generate_password_hash
 import app as tb
-from tokobiru import connection
+from tokobiru.core import connection
 
 db = mongomock.MongoClient().tokobiru
 connection._db = db

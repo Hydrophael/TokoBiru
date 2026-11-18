@@ -1,0 +1,25 @@
+/* TokoBiru - base/tokens.css (4 rules) */
+:root{
+  color-scheme:light;
+  --bg:#f4f7fc; --bg-soft:#e8eff9; --surface:#fff;
+  --ink:#0c2342; --ink2:#425d7a; --muted:#566f89;
+  --line:#dce6f3; --line-strong:#b8cae2; --field:#738fa9; --track:#d5e3f5; --track-edge:#7592ae; --bar:#0b5fc4; --amber-bar:#8f5d00;
+  --blue:#0b5fc4; --blue-d:#084a9c; --on-blue:#fff; --blue-text:#0a4ea3; --blue-soft:#e3eefc; --blue-ring:rgba(11,95,196,.25); --blue-l:#a8c8f2; --focus:#0b5fc4;
+  --navy:#0b2c5c; --hero-a:#0a3b86; --hero-b:#0b5fc4; --hero-ink:#fff; --hero-glow:rgba(255,255,255,.16); --hero-line:rgba(255,255,255,.3);
+  --mark-a:#5aa7f0; --mark-b:#0b5fc4; --toast-act:#ffd451;
+  --accent:#ffc61a; --on-accent:#0c2342; --thumb-on:#fff;
+  --ok:#07674c; --ok-bg:#e1f5ec; --ok-line:#9bd6bd; --ok-solid:#07674c;
+  --warn:#774800; --warn-bg:#fff3d1; --warn-line:#e4c46a;
+  --err:#b3202f; --err-bg:#fdebed; --err-line:#f0aab2; --err-solid:#b3202f; --err-solid-d:#931a27;
+  --t0a:#d6e6fb; --t0b:#eef5fe; --t1a:#ffe9a6; --t1b:#fff6d6; --t2a:#ffd9d6; --t2b:#fff0ee; --t3a:#cdeef2; --t3b:#eaf9fb;
+  --shadow:0 1px 2px rgba(12,35,66,.06),0 4px 14px rgba(12,35,66,.06);
+  --shadow-lg:0 2px 4px rgba(12,35,66,.06),0 14px 34px rgba(12,35,66,.14);
+  --scrim:rgba(8,20,35,.5);
+  --r:16px; --r-sm:12px;
+  --display:'Bricolage Grotesque','Segoe UI',system-ui,sans-serif;
+  --body:'Instrument Sans','Segoe UI',system-ui,sans-serif;
+  --ease:cubic-bezier(.2,.8,.2,1);
+}
+html[data-text=lg]{font-size:112.5%}
+html[data-text=xl]{font-size:125%}
+html.calm *,html.calm *::before,html.calm *::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}

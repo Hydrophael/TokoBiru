@@ -1,0 +1,38 @@
+/* TokoBiru - components/buttons.css (33 rules) */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--surface);border:1.5px solid var(--field);border-radius:var(--r-sm);
+  min-height:44px;padding:10px 18px;font-weight:600;font-size:1rem;cursor:pointer;box-shadow:0 1px 2px rgba(12,35,66,.08);
+  transition:transform .15s var(--ease),box-shadow .15s,background .15s,border-color .15s;white-space:nowrap;position:relative}
+.btn:hover{background:var(--blue-soft);border-color:var(--blue);transform:translateY(-1px)}
+.btn:active{transform:translateY(0) scale(.98)}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.btn.primary{background:var(--blue);border-color:var(--blue);color:var(--on-blue);box-shadow:0 2px 8px rgba(11,95,196,.3)}
+.btn.primary:hover{background:var(--blue-d);border-color:var(--blue-d)}
+.btn.danger{color:var(--err);border-color:var(--err-line)}
+.btn.danger:hover{background:var(--err-bg);border-color:var(--err)}
+.btn.solid-danger{background:var(--err-solid);border-color:var(--err-solid);color:#fff}
+.btn.solid-danger:hover{background:var(--err-solid-d);border-color:var(--err-solid-d)}
+.btn.sm{padding:8px 14px;font-size:.92rem}
+.btn.block{width:100%}
+.btn.flat{border-color:transparent;background:transparent;box-shadow:none}
+.btn.flat:hover{background:var(--blue-soft);border-color:transparent}
+.btn[aria-pressed=true]{background:var(--blue);border-color:var(--blue);color:var(--on-blue)}
+.btn.loading{color:transparent!important;pointer-events:none}
+.btn.loading:disabled{opacity:1}
+.btn.loading::after{content:'';position:absolute;width:20px;height:20px;border-radius:50%;border:2.5px solid var(--line-strong);border-top-color:var(--bar);animation:spin .7s linear infinite}
+.btn.primary.loading::after{border-color:rgba(255,255,255,.4);border-top-color:var(--on-blue)}
+.btn.solid-danger.loading::after{border-color:rgba(255,255,255,.4);border-top-color:#fff}
+.linkbtn{background:none;border:0;padding:6px 4px;font:inherit;font-weight:700;color:var(--blue-text);cursor:pointer;border-radius:6px;text-decoration:underline;text-underline-offset:3px}
+.linkbtn:hover{color:var(--blue-d)}
+.plink{all:unset;cursor:pointer;border-radius:6px}
+.plink:hover{color:var(--blue-text);text-decoration:underline;text-underline-offset:3px}
+.plink:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.to-top{position:fixed;right:20px;bottom:24px;z-index:33;display:grid;place-items:center;width:48px;height:48px;border:0;border-radius:50%;background:var(--navy);color:#fff;cursor:pointer;box-shadow:var(--shadow-lg);transition:translate .15s var(--ease),background .15s}
+.to-top[hidden]{display:none}
+.to-top:hover{background:var(--blue);translate:0 -2px}
+@media(max-width:780px){
+  .to-top{right:14px;bottom:calc(150px + env(safe-area-inset-bottom));width:44px;height:44px}
+}
+.btn.yellow{background:var(--accent);border-color:var(--accent);color:var(--on-accent);box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.btn.yellow:hover{background:#ffd451;border-color:#ffd451}
+.btn.yellow[hidden]{display:none}
+.btn.reading,.btn.reading:disabled{opacity:1;cursor:progress;transform:none}

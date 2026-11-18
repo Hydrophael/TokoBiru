@@ -18,7 +18,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # akar proyek
-from tokobiru import proof_reader as pr  # noqa: E402
+from tokobiru.ai import proof_reader as pr  # noqa: E402
 
 KANDIDAT = [
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",

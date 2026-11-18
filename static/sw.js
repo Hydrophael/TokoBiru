@@ -6,10 +6,10 @@
 // - File lain (halaman, JS, CSS) memakai "jaringan dulu": bila ada sinyal, versi terbaru yang dipakai,
 //   jadi setelah deploy tidak ada campuran file lama dan baru. Salinan tersimpan hanya dipakai saat offline.
 
-const CACHE = 'tokobiru-shell-v14';
+const CACHE = 'tokobiru-shell-v15';
 const NETWORK_TIMEOUT_MS = 4000;   // lewat batas ini dan ada salinan tersimpan, pakai salinan
-const SHELL = ['/', '/static/style.css', '/static/app.js', '/static/core.js', '/static/views.js',
-  '/static/ui.js', '/static/photo.js', '/static/settings.js', '/static/push.js', '/static/notify.js', '/static/layout.js', '/static/webix-core.js', '/static/logs-grid.js', '/static/products-grid.js', '/static/theme.js', '/static/vendor/qr.js', '/static/pwa.js',
+const SHELL = ['/', '/static/css/style.css', '/static/css/base/tokens.css', '/static/css/base/reset.css', '/static/css/base/animations.css', '/static/css/layout/header.css', '/static/css/layout/container.css', '/static/css/components/buttons.css', '/static/css/components/forms.css', '/static/css/components/badges.css', '/static/css/components/overlays.css', '/static/css/components/popovers.css', '/static/css/components/tables.css', '/static/css/pages/auth.css', '/static/css/pages/catalog.css', '/static/css/pages/orders.css', '/static/css/pages/admin.css', '/static/css/pages/profile.css', '/static/css/themes/dark.css', '/static/css/themes/webix.css',
+  '/static/js/api/client.js', '/static/js/components/cart.js', '/static/js/components/layout.js', '/static/js/components/logs-grid.js', '/static/js/components/notify.js', '/static/js/components/order-payment.js', '/static/js/components/photo.js', '/static/js/components/products-grid.js', '/static/js/components/push.js', '/static/js/components/reset-wizard.js', '/static/js/components/shell.js', '/static/js/components/theme.js', '/static/js/components/ui.js', '/static/js/components/webix-core.js', '/static/js/core/app.js', '/static/js/core/constants.js', '/static/js/core/core.js', '/static/js/core/events.js', '/static/js/core/format.js', '/static/js/core/pwa.js', '/static/js/core/router.js', '/static/js/core/state.js', '/static/js/pages/admin.js', '/static/js/pages/auth.js', '/static/js/pages/checkout.js', '/static/js/pages/dashboard.js', '/static/js/pages/orders.js', '/static/js/pages/profile.js', '/static/js/pages/shop.js', '/static/vendor/qr.js',
   '/static/icons/pay/dana.png', '/static/icons/pay/shopeepay.png', '/static/icons/pay/ovo.png'];
 
 self.addEventListener('install', event => {
