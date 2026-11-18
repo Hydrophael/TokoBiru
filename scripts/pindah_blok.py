@@ -27,6 +27,8 @@ JANGKAR_UTAMA = '\nif __name__ == "__main__":'
 #   boleh_hilang (opsional) nama yang sengaja tidak ada lagi di modul app
 #   impor_ekstra (opsional) baris impor tambahan di app.py
 #   sebelum_main (opsional) baris yang disisipkan di app.py sebelum `if __name__ == "__main__"`
+#   setelah_baris (opsional) (teks acuan, baris baru): baris baru disisipkan tepat setelah teks acuan di app.py
+#   tambah_modul (opsional) kode yang ditambahkan di akhir modul tujuan, di luar blok yang dipindah
 #   berkas_lain  (opsional) {berkas: [(lama, baru)]} untuk menyesuaikan berkas lain, mis. tes
 TUGAS = {
     "serializers": {
@@ -40,6 +42,22 @@ TUGAS = {
             "from tokobiru.config import STAFF_ROLES, XENDIT_SIMULATE_SCAN\n\n\n"
         ),
         "potongan": [("HIDDEN_FIELDS = (", "def public_user("), ("def address_json(", "def address_form(")],
+    },
+    "validasi": {
+        "modul": "validation",
+        "kepala": (
+            '"""TokoBiru - validasi dan sanitasi input: regex, pesan galat, Form, decode foto, dan pembaca body JSON.\n\n'
+            "Nama-nama di sini masih diimpor ulang oleh app.py supaya kode dan tes lama tetap jalan.\n"
+            '"""\n'
+            "import base64\n"
+            "import re\n"
+            "import unicodedata\n\n"
+            "from bson import ObjectId\n"
+            "from flask import request\n\n"
+            "from tokobiru.config import PASSWORD_MAX_LEN, PASSWORD_MIN_LEN\n"
+            "from tokobiru.errors import ApiError\n\n\n"
+        ),
+        "potongan": [("TAG_RE = re.compile(", "def public_user(")],
     },
     "koneksi": {
         "modul": "koneksi",
@@ -71,6 +89,37 @@ TUGAS = {
                  'monkeypatch.setattr(koneksi, "_db", database)'),
             ],
         },
+    },
+    "keamanan": {
+        "modul": "keamanan",
+        "kepala": (
+            '"""TokoBiru - keamanan: header, IP klien, pembatasan percobaan, sesi dan peran, CSRF, dan log audit.\n\n'
+            "Pemeriksaan sebelum/sesudah request dipasang lewat pasang(app). Nama-nama di sini masih diimpor\n"
+            'ulang oleh app.py supaya kode dan tes lama tetap jalan.\n"""\n'
+            "import secrets\n"
+            "from datetime import timedelta\n"
+            "from functools import wraps\n\n"
+            "from bson import ObjectId\n"
+            "from flask import g, has_request_context, request, session\n"
+            "from pymongo import ReturnDocument\n"
+            "from pymongo.errors import DuplicateKeyError, PyMongoError\n\n"
+            "from tokobiru.config import (IS_VERCEL, LOCK_MINUTES, MAX_FAILED_LOGIN, MAX_JSON_BYTES, PRODUCT_WRITE_RE,\n"
+            "                             PROFILE_WRITE_RE, PROOF_WRITE_RE, ROLES)\n"
+            "from tokobiru.errors import ApiError\n"
+            "from tokobiru.koneksi import get_db\n"
+            "from tokobiru.util import utcnow\n"
+            "from tokobiru.validation import OID_RE, sanitize\n\n\n"
+        ),
+        "potongan": [("SAFE_METHODS = (", "# --- Notifikasi push (Web Push)")],
+        "ganti": [("@app.before_request\n", ""), ("@app.after_request\n", "")],
+        "tambah_modul": (
+            "def pasang(app):\n"
+            '    """Daftarkan pemeriksaan sebelum dan sesudah tiap request ke aplikasi Flask."""\n'
+            "    app.before_request(guard)\n"
+            "    app.after_request(secure_headers)\n"
+        ),
+        "impor_ekstra": "from tokobiru import keamanan  # noqa: E402\n",
+        "setelah_baris": ("koneksi.sesudah_terhubung = bootstrap\n", "keamanan.pasang(app)\n"),
     },
 }
 
@@ -132,9 +181,18 @@ def potong(teks, tugas):
     if tugas.get("sebelum_main"):
         titik = sisa.index(JANGKAR_UTAMA)
         sisa = sisa[:titik].rstrip("\n") + "\n\n\n" + tugas["sebelum_main"] + "\n" + sisa[titik:]
+    if tugas.get("setelah_baris"):
+        acuan, baris_baru = tugas["setelah_baris"]
+        if acuan not in sisa:
+            raise ValueError(f"Baris acuan tidak ditemukan di app.py: {acuan.strip()!r} (langkah sebelumnya sudah dijalankan?)")
+        titik = sisa.index(acuan) + len(acuan)
+        sisa = sisa[:titik] + baris_baru + sisa[titik:]
     while "\n\n\n\n" in sisa:
         sisa = sisa.replace("\n\n\n\n", "\n\n\n")
-    return sisa, tugas["kepala"] + blok, nama
+    isi = tugas["kepala"] + blok
+    if tugas.get("tambah_modul"):
+        isi += "\n\n" + tugas["tambah_modul"]
+    return sisa, isi, nama
 
 
 SNAPSHOT = r"""
