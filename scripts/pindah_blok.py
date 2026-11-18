@@ -59,11 +59,11 @@ TUGAS = {
         ),
         "potongan": [("TAG_RE = re.compile(", "def public_user(")],
     },
-    "koneksi": {
-        "modul": "koneksi",
+    "connection": {
+        "modul": "connection",
         "kepala": (
             '"""TokoBiru - koneksi MongoDB: alamat, nama database, migrasi koleksi lama, dan indeks.\n\n'
-            "get_db() menyimpan koneksi di _db. Tes memasang database tiruan dengan mengganti tokobiru.koneksi._db\n"
+            "get_db() menyimpan koneksi di _db. Tes memasang database tiruan dengan mengganti tokobiru.connection._db\n"
             "(lihat use_db di tests/conftest.py). Nama-nama selain _db masih diimpor ulang oleh app.py.\n"
             '"""\n'
             "import logging\n\n"
@@ -73,20 +73,20 @@ TUGAS = {
             "                             PRODUCT_COLLECTION, PROOF_RETENTION_DAYS, _env_str)\n\n"
             'log = logging.getLogger("app")   # logger yang sama dengan app.logger\n\n'
             "# Diisi app.py (bootstrap): dipanggil sekali setelah koneksi pertama berhasil\n"
-            "sesudah_terhubung = None\n\n"
+            "after_connect = None\n\n"
         ),
         "potongan": [("_db = None", "@app.errorhandler(ApiError)")],
         "ganti": [("app.logger.", "log."),
-                  ("    bootstrap(db)\n", "    if sesudah_terhubung:\n        sesudah_terhubung(db)\n")],
-        "boleh_hilang": ["_db"],
-        "impor_ekstra": "from tokobiru import koneksi  # noqa: E402\n",
-        "sebelum_main": "koneksi.sesudah_terhubung = bootstrap\n",
+                  ("    bootstrap(db)\n", "    if after_connect:\n        after_connect(db)\n")],
+        "boleh_hilang": ["_db", "connection"],   # "connection": nama baru (impor modul) di app.py, bukan kehilangan
+        "impor_ekstra": "from tokobiru import connection  # noqa: E402\n",
+        "sebelum_main": "connection.after_connect = bootstrap\n",
         "berkas_lain": {
             "tests/conftest.py": [
                 ("from tokobiru import passwords  # noqa: E402\n",
-                 "from tokobiru import koneksi, passwords  # noqa: E402\n"),
+                 "from tokobiru import connection, passwords  # noqa: E402\n"),
                 ('monkeypatch.setattr(tokobiru, "_db", database)',
-                 'monkeypatch.setattr(koneksi, "_db", database)'),
+                 'monkeypatch.setattr(connection, "_db", database)'),
             ],
         },
     },
@@ -106,7 +106,7 @@ TUGAS = {
             "from tokobiru.config import (IS_VERCEL, LOCK_MINUTES, MAX_FAILED_LOGIN, MAX_JSON_BYTES, PRODUCT_WRITE_RE,\n"
             "                             PROFILE_WRITE_RE, PROOF_WRITE_RE, ROLES)\n"
             "from tokobiru.errors import ApiError\n"
-            "from tokobiru.koneksi import get_db\n"
+            "from tokobiru.connection import get_db\n"
             "from tokobiru.util import utcnow\n"
             "from tokobiru.validation import OID_RE, sanitize\n\n\n"
         ),
@@ -118,8 +118,9 @@ TUGAS = {
             "    app.before_request(guard)\n"
             "    app.after_request(secure_headers)\n"
         ),
+        "boleh_hilang": ["keamanan"],   # nama baru (impor modul) di app.py, bukan kehilangan
         "impor_ekstra": "from tokobiru import keamanan  # noqa: E402\n",
-        "setelah_baris": ("koneksi.sesudah_terhubung = bootstrap\n", "keamanan.pasang(app)\n"),
+        "setelah_baris": ("connection.after_connect = bootstrap\n", "keamanan.pasang(app)\n"),
     },
 }
 

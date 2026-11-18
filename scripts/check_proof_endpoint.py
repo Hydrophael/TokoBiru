@@ -3,14 +3,16 @@ import os, sys, json
 from datetime import datetime, timedelta
 from unittest import mock
 sys.path.insert(0, sys.argv[1] if len(sys.argv) > 1 else ".")
-os.environ.update(SECRET_KEY="uji", GEMINI_API_KEY="kunci-uji", PROOF_BANK_HINT="4821")
+os.environ.update(SECRET_KEY="uji", GEMINI_API_KEY="kunci-uji", PROOF_BANK_HINT="4821",
+                  MONGO_URI="mongodb://127.0.0.1:1")
 import mongomock
 from bson import ObjectId
 from werkzeug.security import generate_password_hash
 import app as tb
+from tokobiru import connection
 
 db = mongomock.MongoClient().tokobiru
-tb._db = db
+connection._db = db
 tb.PROOF_CONFIRM_READ = False   # bagian 1-16 menguji alur satu kali baca; bacaan kedua diuji di bagian 17-23
 now = tb.utcnow()
 def mkuser(name, role):

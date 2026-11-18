@@ -25,7 +25,7 @@ _add_update = _Bulk.add_update
 _Bulk.add_update = lambda self, *a, sort=None, **k: _add_update(self, *a, **k)
 # --- akhir isolasi ---
 import app as tokobiru  # noqa: E402
-from tokobiru import passwords  # noqa: E402
+from tokobiru import connection, passwords  # noqa: E402
 
 PASSWORD = "rahasia123"
 
@@ -46,7 +46,7 @@ def db(monkeypatch, use_db):
 def use_db(monkeypatch):
     """Satu-satunya tempat tes memasang database tiruan. Bila _db pindah modul, cukup ubah di sini."""
     def apply(database, reset_sweep=True):
-        monkeypatch.setattr(tokobiru, "_db", database)
+        monkeypatch.setattr(connection, "_db", database)
         if reset_sweep:
             monkeypatch.setattr(tokobiru, "_last_sweep", None)
         return database
