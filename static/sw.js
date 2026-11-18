@@ -6,7 +6,7 @@
 // - File lain (halaman, JS, CSS) memakai "jaringan dulu": bila ada sinyal, versi terbaru yang dipakai,
 //   jadi setelah deploy tidak ada campuran file lama dan baru. Salinan tersimpan hanya dipakai saat offline.
 
-const CACHE = 'tokobiru-shell-v12';
+const CACHE = 'tokobiru-shell-v13';
 const NETWORK_TIMEOUT_MS = 4000;   // lewat batas ini dan ada salinan tersimpan, pakai salinan
 const SHELL = ['/', '/static/style.css', '/static/app.js', '/static/core.js', '/static/views.js',
   '/static/ui.js', '/static/photo.js', '/static/settings.js', '/static/push.js', '/static/notify.js', '/static/layout.js', '/static/webix-core.js', '/static/logs-grid.js', '/static/products-grid.js', '/static/theme.js', '/static/qr.js', '/static/pwa.js',
@@ -73,7 +73,7 @@ self.addEventListener('push', event => {
     body: data.body || '',
     icon: '/static/icons/icon-192.png',
     badge: '/static/icons/badge-96.png',   // ikon kecil monokrom di bilah status Android
-    data: { url: typeof data.url === 'string' && data.url.startsWith('/') ? data.url : '/' }
+    data: { url: typeof data.url === 'string' && data.url.startsWith('/') && !data.url.startsWith('//') ? data.url : '/' }
   };
   // Tag sama = menggantikan notifikasi lama untuk pesanan yang sama, bukan menumpuk
   if (data.tag) { options.tag = data.tag; options.renotify = true; }

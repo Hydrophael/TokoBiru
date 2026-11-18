@@ -27,8 +27,10 @@ const ACTION_LABEL = {
   pesanan_hapus: 'Pesanan Dihapus', pesanan_bersihkan: 'Riwayat Dibersihkan',
   user_buat: 'Pengguna Dibuat', user_ubah: 'Pengguna Diubah', user_hapus: 'Pengguna Dihapus',
   profil_ubah: 'Profil Diubah', alamat_ubah: 'Alamat Diubah',
-  akses_ditolak: 'Akses Ditolak',
+  akses_ditolak: 'Akses Ditolak', log_hapus: 'Log Dihapus', pesanan_minta_batal: 'Minta Batal Pesanan',
   pesanan_bayar_gagal: 'Pembayaran E-Wallet Gagal', pesanan_gagal_gateway: 'Pesanan Gagal Dibuat',
+  push_aktif: 'Notifikasi Diaktifkan', bukti_transfer: 'Bukti Transfer Diunggah', bukti_dibaca: 'Bukti Transfer Dibaca',
+  webhook_diabaikan: 'Webhook Diabaikan',
   pembayaran_tidak_cocok: 'Nominal Bayar Tidak Cocok', pembayaran_terlambat: 'Dibayar Setelah Batal',
   pembayaran_tak_dikenal: 'Pembayaran Tak Dikenal', pembayaran_masalah_selesai: 'Masalah Bayar Selesai'
 };
@@ -70,7 +72,7 @@ export const LOG_GROUPS = [
   { id: '',        label: 'Semua',            test: () => true },
   { id: 'alert',   label: 'Perlu dicek',      test: action => /gagal|ditolak|^pembayaran_(tidak_cocok|terlambat|tak_dikenal)$/.test(action) },
   { id: 'auth',    label: 'Login & password', test: action => /^(register|login|logout|password_|reset_|profil_|alamat_)/.test(action) },
-  { id: 'order',   label: 'Pesanan',          test: action => action.startsWith('pesanan_') || action.startsWith('pembayaran_') },
+  { id: 'order',   label: 'Pesanan',          test: action => action.startsWith('pesanan_') || action.startsWith('pembayaran_') || action.startsWith('bukti_') },
   { id: 'product', label: 'Produk',           test: action => action.startsWith('produk_') },
   { id: 'user',    label: 'Pengguna',         test: action => action.startsWith('user_') }
 ];
@@ -132,7 +134,7 @@ export const EWALLET_GROUP = 'ewallet';
 export const ewalletChoices = () => Object.fromEntries(Object.entries(PAYMENT_LABEL).filter(([code]) => isEwallet(code)));
 export const paymentChoices = () => {
   const choices = Object.fromEntries(Object.entries(PAYMENT_LABEL).filter(([code]) =>
-    !isEwallet(code) && (code !== 'qris' || state.dummyQris)));
+    !isEwallet(code) && (code !== 'qris' || state.dummyQris) && (code !== 'transfer' || state.payInfo)));
   if (state.ewalletOn) choices[EWALLET_GROUP] = 'E-Wallet';
   return choices;
 };
@@ -348,7 +350,12 @@ export const emptyState = (title, text = '', action = '') =>
   `<div class="empty"><b>${escapeHtml(title)}</b><p>${escapeHtml(text)}</p>${action}</div>`;
 
 // Pesanan COD (cod=true) belum menunggu pembayaran: uang baru diterima saat barang sampai
-export const orderStatusText = (status, order) => (order?.cod && status === 'pending' ? 'Menunggu diproses' : STATUS[status][0]);
+// Pesanan ambil di toko tidak "dikirim": statusnya berarti barang siap diambil pelanggan
+export const orderStatusText = (status, order) => {
+  if (order?.cod && status === 'pending') return 'Menunggu diproses';
+  if (order?.shipping_method === 'pickup' && status === 'shipped') return 'Siap diambil';
+  return STATUS[status][0];
+};
 export const statusTag = (status, order) => `<span class="tag ${STATUS[status][1]}">${orderStatusText(status, order)}</span>`;
 
 export function stockInfo(product) {

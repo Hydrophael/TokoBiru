@@ -51,7 +51,7 @@ import time
 import unicodedata
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import make_msgid
@@ -145,7 +145,7 @@ ORDER_STATUS = ("pending", "paid", "shipped", "completed", "cancelled")
 TRANSITIONS = {
     "pending": {"paid", "cancelled"},
     "paid": {"shipped", "cancelled"},
-    "shipped": {"completed"},
+    "shipped": {"completed", "cancelled"},   # dibatalkan setelah dikirim = retur; hanya staf (lihat USER_TRANSITIONS)
     "completed": set(),
     "cancelled": set(),
 }
@@ -165,6 +165,10 @@ def _env_int(name, default, minimum=1):
 
 
 PENDING_TTL_HOURS = _env_int("PENDING_TTL_HOURS", 24)
+# Pesanan tunai (COD) menunggu toko memprosesnya, bukan menunggu pelanggan membayar. Batasnya dibuat lebih longgar supaya
+# toko yang terlambat tidak membatalkan pesanan pelanggan, dan staf diingatkan COD_REMIND_HOURS jam sebelum batas habis.
+COD_TTL_HOURS = _env_int("COD_TTL_HOURS", 72)
+COD_REMIND_HOURS = _env_int("COD_REMIND_HOURS", 12)
 QRIS_TTL_MINUTES = _env_int("QRIS_TTL_MINUTES", 60)
 # Akurasi baca bukti: hasil yang menentukan dibaca dua kali oleh model berbeda dan baru dipercaya bila keduanya sama
 PROOF_CONFIRM_READ = _env_str("PROOF_CONFIRM_READ", "1").lower() not in ("0", "false", "off", "tidak")
@@ -191,13 +195,21 @@ EWALLET_TTL_MINUTES = {
 PUBLIC_URL = _env_str("PUBLIC_URL").rstrip("/")
 LOG_RETENTION_DAYS = _env_int("LOG_RETENTION_DAYS", 90)
 MAX_PENDING_ORDERS = _env_int("MAX_PENDING_ORDERS", 3)
+# Pesanan tunai (COD) dihitung terpisah: mereka menunggu toko, bukan menunggu pelanggan membayar
+MAX_PENDING_COD = _env_int("MAX_PENDING_COD_ORDERS", 5)
+# Bukti transfer yang belum dicek staf sekian jam: staf diingatkan sekali (pesanan bukti tidak kedaluwarsa sendiri)
+PROOF_REMIND_HOURS = _env_int("PROOF_REMIND_HOURS", 12)
 SHIPPING_FEE = _env_int("SHIPPING_FEE", 10000, minimum=0)
 FREE_SHIPPING_MIN = _env_int("FREE_SHIPPING_MIN", 0, minimum=0)
 SHIPPING_METHODS = ("delivery", "pickup")
 # E-wallet lewat Xendit: kode metode di toko -> kode kanal di Xendit
 EWALLET_CHANNELS = {"ewallet_dana": "ID_DANA", "ewallet_shopeepay": "ID_SHOPEEPAY", "ewallet_ovo": "ID_OVO"}
-PAYMENT_METHODS = (("transfer", "cash") + (("qris",) if QRIS_ENABLED else ())
+# Transfer bank hanya ditawarkan bila PAY_INFO (rekening tujuan) terisi: tanpa itu pelanggan tidak tahu harus transfer ke mana
+PAYMENT_METHODS = (((("transfer",) if PAY_INFO else ()) + ("cash",)) + (("qris",) if QRIS_ENABLED else ())
                    + (tuple(EWALLET_CHANNELS) if XENDIT_ENABLED else ()))
+if not PAY_INFO:
+    print("PERINGATAN: PAY_INFO kosong; transfer bank tidak ditawarkan ke pelanggan. Isi rekening tujuan untuk mengaktifkannya.",
+          file=sys.stderr)
 EXPIRE_SWEEP_SECONDS = 60
 EXPIRE_BATCH = 50
 MAX_QTY_PER_PRODUCT = 99
@@ -554,7 +566,7 @@ HIDDEN_FIELDS = ("password_hash", "failed", "locked_until", "idem_key", "session
                  "ewallet_id", "ewallet_url",
                  "reset_code_hash", "reset_expires", "reset_sent_at", "reset_failed", "reset_locked_until",
                  "image", "image_type", "image_v",
-                 "addresses", "hidden_by_user", "hidden_at")
+                 "addresses", "hidden_by_user", "hidden_at", "proof_remind_sent")
 
 
 def serialize_value(value):
@@ -875,6 +887,7 @@ PUSH_ENABLED = bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY and webpush)
 PUSH_MAX_DEVICES_PER_USER = 5
 PUSH_MAX_SUBS = 200
 PUSH_TIMEOUT = 3
+PUSH_BUDGET = 4   # detik: total waktu menunggu semua perangkat, supaya respons ke pelanggan tidak tertahan push yang lambat
 # Server hanya boleh menghubungi layanan push milik browser, supaya alamat buatan pengguna tidak bisa dipakai menyerang jaringan dalam
 PUSH_HOST_SUFFIXES = ("googleapis.com", "push.services.mozilla.com", "push.apple.com", "notify.windows.com")
 PUSH_KEY_RE = re.compile(r"[A-Za-z0-9_\-]{8,200}={0,2}")
@@ -927,8 +940,14 @@ def deliver_push(db, subs, payload):
     """Kirim ke semua perangkat di `subs`; perangkat yang sudah tidak berlangganan dihapus. Mengembalikan jumlah terkirim."""
     if not subs:
         return 0
-    with ThreadPoolExecutor(max_workers=min(8, len(subs))) as pool:
-        results = list(pool.map(lambda sub: _push_one(sub, payload), subs))
+    pool = ThreadPoolExecutor(max_workers=min(16, len(subs)))
+    futures = [pool.submit(_push_one, sub, payload) for sub in subs]
+    try:
+        wait(futures, timeout=PUSH_BUDGET)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)   # yang belum selesai ditinggalkan; bukan alasan menahan respons
+    results = [future.result() if future.done() and not future.cancelled() and future.exception() is None else None
+               for future in futures]
     gone = [sub["_id"] for sub, ok in zip(subs, results) if ok is False]
     if gone:
         db.push_subs.delete_many({"_id": {"$in": gone}})
@@ -936,14 +955,15 @@ def deliver_push(db, subs, payload):
 
 
 def record_notification(db, user_ids, title, body, tag, view="orders"):
-    """Simpan kabar ke pusat notifikasi di dalam aplikasi (lonceng di header). Kabar yang sama (akun + tag) tidak dobel."""
+    """Simpan kabar ke pusat notifikasi di dalam aplikasi (lonceng di header). Kabar yang sama (akun + tag) tidak dobel,
+    tetapi bila terjadi lagi (mis. bukti transfer diganti) kabar itu diperbarui: isinya diganti, tanda baca dihapus, dan naik ke atas."""
     if not user_ids:
         return
     now = utcnow()
     db.notifications.bulk_write([
         UpdateOne({"user_id": uid, "tag": tag},
-                  {"$setOnInsert": {"user_id": uid, "tag": tag, "title": title, "body": body, "view": view,
-                                    "read": False, "created_at": now}}, upsert=True)
+                  {"$set": {"title": title, "body": body, "read": False, "created_at": now},
+                   "$setOnInsert": {"user_id": uid, "tag": tag, "view": view}}, upsert=True)
         for uid in user_ids], ordered=False)
 
 
@@ -980,6 +1000,17 @@ CUSTOMER_PUSH = {
     "shipped": lambda code: ("Pesanan dikirim", f"Pesanan {code} sedang diantar. Mohon siap menerima."),
     "cancelled": lambda code: ("Pesanan dibatalkan", f"Pesanan {code} dibatalkan oleh toko. Hubungi toko bila ada pertanyaan."),
 }
+
+
+def customer_push(status, order, refund=False):
+    """Kabar untuk pelanggan: sama dengan CUSTOMER_PUSH, tetapi pesanan ambil di toko tidak diantar dan pembatalan yang perlu refund menyebutnya."""
+    code = order["code"]
+    if status == "shipped" and order.get("shipping_method") == "pickup":
+        cash = f" Siapkan uang tunai {format_rupiah(order['total'])}." if order.get("cod") else ""
+        return "Pesanan siap diambil", f"Pesanan {code} sudah siap diambil di toko.{cash} Tunjukkan kode pesanan saat mengambil."
+    if status == "cancelled" and refund:
+        return "Pesanan dibatalkan", f"Pesanan {code} dibatalkan oleh toko. Dana Anda akan dikembalikan; hubungi toko bila ada pertanyaan."
+    return CUSTOMER_PUSH[status](code)
 
 
 @app.post("/api/push/subscribe")
@@ -1137,6 +1168,14 @@ def auth_login():
 @app.post("/api/auth/logout")
 def auth_logout():
     if session.get("uid"):
+        endpoint = (request.get_json(silent=True) or {}).get("endpoint")
+        try:
+            user = current_user()
+            if user and isinstance(endpoint, str) and len(endpoint) <= 700:
+                # Perangkat ini dilepas dari akun supaya akun lain di perangkat yang sama tidak menerima kabar toko
+                get_db().push_subs.delete_one({"_id": hashlib.sha256(endpoint.encode()).hexdigest(), "user_id": user["_id"]})
+        except PyMongoError as exc:
+            app.logger.warning("Langganan push gagal dilepas saat keluar: %s", exc)
         audit("logout", "")
     session.clear()
     session["csrf"] = secrets.token_urlsafe(32)
@@ -1257,7 +1296,7 @@ def auth_password():
     user = current_user()
     now = utcnow()
     if user.get("locked_until") and user["locked_until"] > now:
-        raise account_locked_error()
+        raise ApiError(f"Ganti password dikunci sementara karena terlalu banyak percobaan. Coba lagi dalam {LOCK_MINUTES} menit.", 429)
     if not check_password_hash(user["password_hash"], clean["current_password"]):
         record_failed_login(db, user, now)
         audit("password_gagal", "password lama salah")
@@ -1615,13 +1654,17 @@ def products_update(product_id):
         if delta < 0:
             query["stock"] = {"$gte": -delta}
 
-    result = collection.update_one(query, update)
-    if result.matched_count == 0:
+    # Dokumen sebelum diubah dibawa pulang oleh perintah yang sama, jadi harga lama yang dicatat pasti harga yang tergantikan
+    before = collection.find_one_and_update(query, update, projection={"price": 1}, return_document=ReturnDocument.BEFORE)
+    if before is None:
         if not collection.find_one({"_id": target_id}):
             raise ApiError("Produk tidak ditemukan", 404)
         raise ApiError("Stok berubah karena ada penjualan. Muat ulang halaman lalu coba lagi.", 409)
+    old_price, new_price = before.get("price"), clean.get("price")
+    price_note = (f" (harga {format_rupiah(old_price)} → {format_rupiah(new_price)})"
+                  if isinstance(old_price, int) and isinstance(new_price, int) and old_price != new_price else "")
     photo_note = " (foto diganti)" if image_set else " (foto dihapus)" if image_unset else ""
-    audit("produk_ubah", clean["name"] + (f" (stok {delta:+d})" if delta else "") + photo_note)
+    audit("produk_ubah", clean["name"] + (f" (stok {delta:+d})" if delta else "") + price_note + photo_note)
     return jsonify({"product": product_json(collection.find_one({"_id": target_id}, NO_IMAGE))})
 
 
@@ -1699,19 +1742,29 @@ _last_sweep = None
 
 
 def is_overdue(order):
+    # Transfer yang sudah ada buktinya tidak kedaluwarsa sendiri: uangnya mungkin sudah masuk, jadi stafflah yang memutuskan
     expires = order.get("expires_at")
-    return bool(order.get("status") == "pending" and expires and expires <= utcnow())
+    return bool(order.get("status") == "pending" and expires and expires <= utcnow() and not order.get("proof_at"))
 
 
 def cancel_expired_order(db, order, reason="expired", audit_action="pesanan_kedaluwarsa"):
     # Atomik: hanya pesanan yang masih pending yang dibatalkan, stok dikembalikan sekali saja
+    query = {"_id": order["_id"], "status": "pending"}
+    if reason == "expired":
+        query["proof_at"] = None   # bukti bisa saja baru diunggah setelah pesanan dibaca: jangan dibatalkan
     result = db.orders.update_one(
-        {"_id": order["_id"], "status": "pending"},
+        query,
         {"$set": {"status": "cancelled", "cancel_reason": reason, "updated_at": utcnow()}})
     if result.modified_count != 1:
         return False
     release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
     audit(audit_action, order["code"], {"username": "sistem", "role": "-"})
+    why = ("karena pembayaran gagal atau ditolak" if reason == "payment_failed" else "karena melewati batas waktu bayar")
+    try:
+        record_notification(db, [order["user_id"]], "Pesanan dibatalkan", f"Pesanan {order['code']} dibatalkan otomatis {why}.",
+                            f"my-{order['code']}-batal")
+    except PyMongoError as exc:
+        app.logger.warning("Kabar pembatalan otomatis gagal disimpan: %s", exc)
     return True
 
 
@@ -1721,6 +1774,37 @@ def settle_overdue(db, order):
         cancel_expired_order(db, order)
         return db.orders.find_one({"_id": order["_id"]}) or order
     return order
+
+
+def remind_cod_orders(db, now):
+    # Pesanan tunai yang hampir kedaluwarsa: staf diingatkan sekali supaya sempat memproses atau membatalkannya sendiri
+    due = db.orders.find({"status": "pending", "cod": True, "remind_sent": {"$ne": True},
+                          "expires_at": {"$gt": now, "$lte": now + timedelta(hours=COD_REMIND_HOURS)}}).limit(EXPIRE_BATCH)
+    for order in list(due):
+        claimed = db.orders.update_one({"_id": order["_id"], "status": "pending", "remind_sent": {"$ne": True}},
+                                       {"$set": {"remind_sent": True}})
+        if claimed.modified_count != 1:
+            continue   # permintaan lain sudah mengingatkan
+        deadline = (order["expires_at"] + WIB_OFFSET).strftime("%d/%m %H:%M")
+        push_staff("Pesanan tunai belum diproses",
+                   f"{order['code']} · {format_rupiah(order['total'])} akan dibatalkan otomatis {deadline} WIB. Proses atau batalkan sebelum itu.",
+                   f"order-{order['code']}-ingat")
+
+
+def remind_proof_orders(db, now):
+    # Transfer yang sudah ada buktinya tidak kedaluwarsa sendiri, jadi stok dan jatah pesanan pelanggan tertahan sampai staf bertindak.
+    # Staf diingatkan sekali setelah PROOF_REMIND_HOURS jam supaya pesanan tidak terlupakan.
+    due = db.orders.find({"status": "pending", "proof_remind_sent": {"$ne": True},
+                          "proof_at": {"$lte": now - timedelta(hours=PROOF_REMIND_HOURS)}}).limit(EXPIRE_BATCH)
+    for order in list(due):
+        claimed = db.orders.update_one({"_id": order["_id"], "status": "pending", "proof_remind_sent": {"$ne": True}},
+                                       {"$set": {"proof_remind_sent": True}})
+        if claimed.modified_count != 1:
+            continue   # permintaan lain sudah mengingatkan
+        push_staff("Bukti transfer belum dicek",
+                   f"{order['code']} · {format_rupiah(order['total'])}: bukti sudah diunggah lebih dari {PROOF_REMIND_HOURS} jam. "
+                   "Cek mutasi, lalu konfirmasi pembayaran atau batalkan.",
+                   f"order-{order['code']}-ingat-bukti")
 
 
 def sweep_expired_orders(db, force=False):
@@ -1736,13 +1820,15 @@ def sweep_expired_orders(db, force=False):
         now = utcnow()
         cutoff = now - timedelta(hours=PENDING_TTL_HOURS)
         # Batas bayar tiap pesanan ada di expires_at; created_at hanya cadangan untuk data lama
-        stale = list(db.orders.find({"status": "pending",
+        stale = list(db.orders.find({"status": "pending", "proof_at": None,   # ada bukti transfer: tidak dibatalkan otomatis
                                      "$or": [{"expires_at": {"$lte": now}},
                                              {"expires_at": {"$exists": False}, "created_at": {"$lt": cutoff}}]}
                                     ).limit(EXPIRE_BATCH))
         for order in stale:
             if cancel_expired_order(db, order):
                 cancelled += 1
+        remind_cod_orders(db, now)
+        remind_proof_orders(db, now)
     except PyMongoError as exc:
         app.logger.error("Penyapuan pesanan kedaluwarsa gagal: %s", exc)
     return cancelled
@@ -1751,13 +1837,18 @@ def sweep_expired_orders(db, force=False):
 def cancel_pending_orders(db, user_id, reason):
     cancelled = 0
     for order in db.orders.find({"user_id": user_id, "status": "pending"}):
-        result = db.orders.update_one(
-            {"_id": order["_id"], "status": "pending"},
-            {"$set": {"status": "cancelled", "cancel_reason": reason, "updated_at": utcnow()}})
+        changes = {"status": "cancelled", "cancel_reason": reason, "updated_at": utcnow()}
+        has_proof = bool(order.get("proof_at"))
+        if has_proof:
+            changes["payment_issue"] = "proof_cancelled"   # bukti sudah dikirim: uangnya mungkin sudah masuk
+        result = db.orders.update_one({"_id": order["_id"], "status": "pending"}, {"$set": changes})
         if result.modified_count != 1:
             continue
         release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
         cancelled += 1
+        if has_proof:
+            push_staff("Cek bukti transfer", f"{order['code']} dibatalkan karena akun pelanggan diubah, tetapi bukti transfer sudah diunggah. Cek mutasi.",
+                       f"order-{order['code']}-masalah")
     return cancelled
 
 
@@ -1838,7 +1929,11 @@ def staff_next_statuses(order):
             return {"shipped", "cancelled"}
         if order["status"] == "shipped":
             return {"completed", "cancelled"}
-    return TRANSITIONS[order["status"]]
+    allowed = set(TRANSITIONS[order["status"]])
+    # QRIS dan e-wallet dilunasi oleh Xendit (webhook); staf tidak boleh menandainya dibayar. Hanya transfer bank yang dikonfirmasi manual
+    if order["status"] == "pending" and (order.get("payment_method") == "qris" or order.get("payment_method") in EWALLET_CHANNELS):
+        allowed.discard("paid")
+    return allowed
 
 
 def check_status_change(user, order, new_status):
@@ -1848,6 +1943,9 @@ def check_status_change(user, order, new_status):
         cod_done = order.get("cod") and (current_status, new_status) == ("shipped", "completed")
         if (current_status, new_status) not in USER_TRANSITIONS or cod_done:
             raise ApiError("Anda tidak dapat mengubah pesanan ke status tersebut", 403)
+        # Seperti di kebanyakan toko: setelah bukti transfer dikirim, uangnya mungkin sudah masuk, jadi toko yang memutuskan
+        if new_status == "cancelled" and order.get("proof_at"):
+            raise ApiError("Bukti transfer sudah dikirim, jadi pesanan tidak bisa dibatalkan sendiri. Hubungi toko bila ingin membatalkan.", 409)
     elif new_status not in staff_next_statuses(order):
         raise ApiError(f"Status tidak bisa berubah dari '{current_status}' ke '{new_status}'", 422)
 
@@ -1860,15 +1958,34 @@ def shipping_fee_for(subtotal, method):
     return SHIPPING_FEE
 
 
-def enforce_pending_limit(db, user):
-    # Stok ditahan sejak pesanan dibuat, jadi pesanan belum dibayar dibatasi per pelanggan
-    pending = db.orders.count_documents({"user_id": user["_id"], "status": "pending"})
-    if pending >= MAX_PENDING_ORDERS:
-        raise ApiError(
-            f"Anda masih punya {pending} pesanan yang belum dibayar. "
-            "Bayar atau batalkan salah satunya di menu Pesanan sebelum membuat yang baru.",
+def pending_filter(user_id, cod):
+    # Pesanan tunai menunggu toko, yang lain menunggu pembayaran pelanggan: dua batas terpisah
+    return {"user_id": user_id, "status": "pending", "cod": True if cod else {"$ne": True}}
+
+
+def pending_limit(cod):
+    return MAX_PENDING_COD if cod else MAX_PENDING_ORDERS
+
+
+def enforce_pending_limit(db, user, cod=False):
+    # Stok ditahan sejak pesanan dibuat, jadi pesanan yang belum selesai dibatasi per pelanggan
+    pending = db.orders.count_documents(pending_filter(user["_id"], cod))
+    if pending >= pending_limit(cod):
+        raise pending_limit_error(pending, cod)
+
+
+def pending_limit_error(pending, cod=False):
+    if cod:
+        return ApiError(
+            f"Anda masih punya {pending} pesanan tunai yang menunggu diproses toko. "
+            "Tunggu sampai diproses, atau batalkan salah satunya di menu Pesanan sebelum membuat yang baru.",
             429,
         )
+    return ApiError(
+        f"Anda masih punya {pending} pesanan yang belum dibayar. "
+        "Bayar atau batalkan salah satunya di menu Pesanan sebelum membuat yang baru.",
+        429,
+    )
 
 
 class GatewayError(Exception):
@@ -1967,7 +2084,7 @@ def orders_create():
     data = json_body()
     data["phone"] = re.sub(r"[\s.\-]", "", data["phone"]) if isinstance(data.get("phone"), str) else data.get("phone")
     data.setdefault("shipping_method", "delivery")
-    data.setdefault("payment_method", "transfer")
+    data.setdefault("payment_method", PAYMENT_METHODS[0])
     form = Form(data)
     form.choice("shipping_method", "Pengiriman", SHIPPING_METHODS)
     form.choice("payment_method", "Metode pembayaran", PAYMENT_METHODS)
@@ -1988,7 +2105,7 @@ def orders_create():
     if previous:
         return jsonify({"order": order_json(previous, user), "replayed": True}), 200
     sweep_expired_orders(db)
-    enforce_pending_limit(db, user)
+    enforce_pending_limit(db, user, clean["payment_method"] == "cash")
     reserved, lines = reserve_stock(db, wanted, expected_prices)
     try:
         now = utcnow()
@@ -2006,8 +2123,10 @@ def orders_create():
             order["expires_at"] = now + timedelta(minutes=QRIS_TTL_MINUTES)
         elif clean["payment_method"] in EWALLET_CHANNELS:
             order["expires_at"] = now + timedelta(minutes=EWALLET_TTL_MINUTES[clean["payment_method"]])
+        elif order["cod"]:
+            # tunai menunggu toko, bukan pelanggan, jadi batasnya lebih longgar; tanpa batas, pesanan yang ditinggalkan menahan stok selamanya
+            order["expires_at"] = now + timedelta(hours=COD_TTL_HOURS)
         else:
-            # transfer dan tunai: batas PENDING_TTL_HOURS; tanpa batas, pesanan tunai yang ditinggalkan menahan stok selamanya
             order["expires_at"] = now + timedelta(hours=PENDING_TTL_HOURS)
         if key:
             order["idem_key"] = key
@@ -2020,6 +2139,11 @@ def orders_create():
     except Exception:
         release_stock(db, reserved)
         raise
+    # Dua permintaan bersamaan bisa sama-sama lolos pemeriksaan di atas: hitung ulang setelah tersimpan dan batalkan yang berlebih
+    pending_now = db.orders.count_documents(pending_filter(user["_id"], order["cod"]))
+    if pending_now > pending_limit(order["cod"]):
+        drop_unpayable_order(db, order, "melebihi batas pesanan belum dibayar")
+        raise pending_limit_error(pending_now - 1, order["cod"])
     if clean["payment_method"] == "qris" and XENDIT_ENABLED:
         try:
             qr_id, qr_string = create_xendit_qr(order)
@@ -2058,6 +2182,10 @@ def orders_status(order_id):
     check_status_change(user, order, new_status)
     now = utcnow()
     changes = {"status": new_status, "updated_at": now}
+    # Uang non-COD sudah masuk bila pesanan dibatalkan dari paid/shipped (termasuk retur setelah dikirim): tandai agar dikembalikan
+    refund = new_status == "cancelled" and current_status in ("paid", "shipped") and not order.get("cod")
+    if refund:
+        changes["needs_refund"] = True
     if new_status == "paid":
         changes["paid_at"] = now
     elif new_status == "completed" and order.get("cod") and current_status == "shipped":
@@ -2069,12 +2197,42 @@ def orders_status(order_id):
         raise ApiError("Status pesanan sudah berubah. Muat ulang data.", 409)
     if new_status == "cancelled":
         release_stock(db, [(item["product_id"], item["qty"]) for item in order["items"]])
-    audit("pesanan_status", f"{order['code']}: {current_status} → {new_status}")
+    audit("pesanan_status", f"{order['code']}: {current_status} → {new_status}" + (" (perlu refund)" if refund else ""))
+    if refund:
+        push_staff("Perlu refund", f"{order['code']} dibatalkan setelah dibayar. Kembalikan uang pelanggan.",
+                   f"order-{order['code']}-refund")
+    if user["role"] == "user" and new_status == "cancelled":
+        push_staff("Pesanan dibatalkan pelanggan", f"{order['code']} · {format_rupiah(order['total'])} dibatalkan oleh pelanggan.",
+                   f"order-{order['code']}-batal")
     # Pelanggan dikabari hanya bila yang mengubah status adalah staf toko (bukan dirinya sendiri)
     if user["role"] != "user" and new_status in CUSTOMER_PUSH:
-        title, body = CUSTOMER_PUSH[new_status](order["code"])
+        title, body = customer_push(new_status, order, refund)
         push_user(order["user_id"], title, body, f"my-{order['code']}-{new_status}")
     return jsonify({"order": order_json(db.orders.find_one({"_id": target_id}), user)})
+
+
+@app.post("/api/orders/<order_id>/cancel-request")
+@roles_required("user")
+def order_cancel_request(order_id):
+    # Setelah bukti transfer dikirim, uangnya mungkin sudah masuk, jadi pelanggan tidak membatalkan sendiri: ia meminta, staf memutuskan
+    db = get_db()
+    user = current_user()
+    order = db.orders.find_one({"_id": object_id(order_id, "Pesanan")})
+    if not order or order["user_id"] != user["_id"]:
+        raise ApiError("Pesanan tidak ditemukan", 404)
+    if order["status"] != "pending" or not order.get("proof_at"):
+        raise ApiError("Permintaan batal hanya untuk pesanan yang bukti transfernya sudah dikirim dan belum dikonfirmasi. "
+                       "Pesanan lain bisa dibatalkan langsung.", 409)
+    now = utcnow()
+    result = db.orders.update_one(
+        {"_id": order["_id"], "status": "pending", "cancel_requested_at": {"$exists": False}},
+        {"$set": {"cancel_requested_at": now, "updated_at": now}})
+    if result.modified_count == 1:   # permintaan ulang tidak membunyikan notifikasi lagi
+        audit("pesanan_minta_batal", order["code"])
+        push_staff("Pelanggan minta batal",
+                   f"{order['code']} · {format_rupiah(order['total'])}. Bukti transfer sudah diunggah: cek mutasi, lalu batalkan bila setuju.",
+                   f"order-{order['code']}-minta-batal")
+    return jsonify({"order": order_json(db.orders.find_one({"_id": order["_id"]}), user)})
 
 
 PAY_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{16,64}")
@@ -2170,7 +2328,7 @@ def order_proof_upload(order_id):
                                  "sha256": hashlib.sha256(bytes(data)).hexdigest(), "revision": revision}, upsert=True)
     # Foto baru: hasil baca foto lama tidak berlaku lagi
     db.orders.update_one({"_id": order["_id"], "status": "pending"},
-                         {"$set": {"proof_at": now, "updated_at": now}, "$unset": {"proof_check": ""}})
+                         {"$set": {"proof_at": now, "updated_at": now}, "$unset": {"proof_check": "", "proof_remind_sent": ""}})
     order = db.orders.find_one({"_id": order["_id"]})   # ambil ulang: Mongo menyimpan waktu dengan ketelitian milidetik
     audit("bukti_transfer", order["code"])
 
@@ -2588,6 +2746,13 @@ def user_listing(doc):
     return out
 
 
+def forget_user_devices(db, user_id, notifications=False):
+    """Lepas perangkat push akun ini; notifikasi dalam aplikasi ikut dihapus bila `notifications` (kabar staf tidak boleh tersisa)."""
+    db.push_subs.delete_many({"user_id": user_id})
+    if notifications:
+        db.notifications.delete_many({"user_id": user_id})
+
+
 @app.get("/api/users")
 @roles_required("master")
 def users_list():
@@ -2647,7 +2812,10 @@ def users_update(user_id):
         raise ApiError("Tidak ada perubahan", 422)
     db.users.update_one({"_id": target_id}, {"$set": changes})
     detail = f"{target['username']}: {changes}"
+    if target["role"] in STAFF_ROLES and changes.get("role") == "user":
+        forget_user_devices(db, target_id, notifications=True)   # bukan staf lagi: kabar tokonya tidak boleh tersisa
     if changes.get("active") is False:
+        forget_user_devices(db, target_id)
         freed = cancel_pending_orders(db, target_id, "account_disabled")
         if freed:
             detail += f" ({freed} pesanan belum dibayar dibatalkan)"
@@ -2665,7 +2833,17 @@ def users_delete(user_id):
         raise ApiError("Pengguna tidak ditemukan", 404)
     if target["_id"] == current_user()["_id"] or target["role"] == "master":
         raise ApiError("Akun master tidak dapat dihapus", 403)
+    # Pesanan yang uangnya mungkin sudah masuk tidak boleh kehilangan pemilik, apalagi foto buktinya: nonaktifkan saja akunnya
+    blocking = db.orders.count_documents({"user_id": target_id, "$or": [
+        {"status": {"$in": ["paid", "shipped"]}},
+        {"status": "pending", "proof_at": {"$ne": None}},
+        {"needs_refund": True},
+        {"payment_issue": {"$exists": True}}]})
+    if blocking:
+        raise ApiError(f"Akun ini masih punya {blocking} pesanan yang sedang berjalan atau pembayarannya belum beres, "
+                       "jadi belum bisa dihapus. Selesaikan dulu, atau nonaktifkan akunnya saja.", 409)
     freed = cancel_pending_orders(db, target_id, "account_deleted")
+    forget_user_devices(db, target_id, notifications=True)
     # Pesanan tetap disimpan untuk pembukuan, tetapi foto bukti (nama, nomor rekening) ikut dihapus bersama akunnya
     order_ids = [order["_id"] for order in db.orders.find({"user_id": target_id}, {"_id": 1})]
     photos = db.order_proofs.delete_many({"_id": {"$in": order_ids}}).deleted_count if order_ids else 0
@@ -2679,7 +2857,7 @@ def users_delete(user_id):
 @app.get("/api/logs")
 @roles_required("master")
 def logs_list():
-    docs = get_db().logs.find({"action": {"$ne": "log_hapus"}}).sort("ts", -1).limit(LOGS_LIMIT)
+    docs = get_db().logs.find().sort("ts", -1).limit(LOGS_LIMIT)
     return jsonify({"logs": [serialize(log) for log in docs]})
 
 
@@ -2690,7 +2868,15 @@ def logs_delete():
     if not isinstance(ids, list) or not 1 <= len(ids) <= LOGS_LIMIT:
         raise ApiError(f"Pilih 1 sampai {LOGS_LIMIT} log", 422)
     oids = list({object_id(item, "Log") for item in ids})
-    result = get_db().logs.delete_many({"_id": {"$in": oids}})
+    db = get_db()
+    # Ringkasan dicatat sebelum dihapus; isi log yang dihapus tidak disimpan, hanya berapa banyak dan rentang waktunya
+    doomed = list(db.logs.find({"_id": {"$in": oids}}, {"ts": 1}))
+    result = db.logs.delete_many({"_id": {"$in": oids}})
+    if result.deleted_count:
+        stamps = sorted(doc["ts"] for doc in doomed if doc.get("ts"))
+        span = (f", {(stamps[0] + WIB_OFFSET).strftime('%d/%m/%y %H:%M')} s/d {(stamps[-1] + WIB_OFFSET).strftime('%d/%m/%y %H:%M')} WIB"
+                if stamps else "")
+        audit("log_hapus", f"{result.deleted_count} log dihapus{span}")
     return jsonify({"deleted": result.deleted_count})
 
 

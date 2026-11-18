@@ -57,7 +57,8 @@ import { actionTagHtml, actorHtml, logEmptyHtml, mountLogGrid, refreshLogGrid, v
 import { mountProductGrid, productActionsHtml, productCountHtml, productNameHtml, productResetHtml } from './products-grid.js';
 
 function paymentBoxHtml(order, title = '') {
-  const deadline = order.expires_at ? `Bayar sebelum <b>${formatDate(order.expires_at)}</b>` : '';
+  // Transfer yang sudah ada buktinya tidak kedaluwarsa sendiri (lihat is_overdue di app.py), jadi batas bayar tidak ditampilkan lagi
+  const deadline = order.expires_at && !order.proof_at ? `Bayar sebelum <b>${formatDate(order.expires_at)}</b>` : '';
   const head = title || deadline
     ? `<div class="r-pay-head">${title ? `<b>${title}</b>` : ''}${deadline ? `<span>${deadline}</span>` : ''}</div>` : '';
   return `<section class="r-pay"${title ? ` aria-label="${title}"` : ''}>
@@ -954,22 +955,37 @@ function timelineHtml(status, order = {}) {
 const statusButton = (order, status, label, cls = '') =>
   `<button class="btn sm ${cls}" data-act="order-status" data-id="${order.id}" data-status="${status}">${label}</button>`;
 
+const isPickup = order => order.shipping_method === 'pickup';
+// QRIS dan e-wallet dilunasi otomatis oleh Xendit; staf tidak boleh menandainya "Dibayar" (server juga menolak)
+const isGatewayPayment = order => order.payment_method === 'qris' || isEwallet(order.payment_method);
+
 function staffOrderActions(order) {
+  const cancel = statusButton(order, 'cancelled', 'Batalkan', 'danger');
+  const ship = statusButton(order, 'shipped', isPickup(order) ? 'Tandai siap diambil' : 'Tandai dikirim', 'primary');
   switch (order.status) {
-    case 'pending': if (order.cod) return statusButton(order, 'shipped', 'Tandai dikirim', 'primary') + statusButton(order, 'cancelled', 'Batalkan', 'danger');
-      return statusButton(order, 'paid', order.payment_method === 'cash' ? 'Terima pembayaran tunai' : 'Konfirmasi pembayaran', 'primary') + statusButton(order, 'cancelled', 'Batalkan', 'danger');
-    case 'paid':    return statusButton(order, 'shipped', 'Tandai dikirim', 'primary') + statusButton(order, 'cancelled', 'Batalkan', 'danger');
+    case 'pending':
+      if (order.cod) return ship + cancel;
+      if (isGatewayPayment(order)) return cancel;
+      return statusButton(order, 'paid', 'Konfirmasi pembayaran', 'primary') + cancel;
+    case 'paid':    return ship + cancel;
+    // Setelah dikirim/siap diambil staf masih bisa membatalkan (retur); pesanan non-COD yang dibatalkan ditandai perlu refund
     case 'shipped': return order.cod
-      ? statusButton(order, 'completed', 'Selesai, uang diterima', 'primary') + statusButton(order, 'cancelled', 'Batalkan', 'danger')
-      : statusButton(order, 'completed', 'Tandai selesai', 'primary');
+      ? statusButton(order, 'completed', 'Selesai, uang diterima', 'primary') + cancel
+      : statusButton(order, 'completed', isPickup(order) ? 'Sudah diambil' : 'Tandai selesai', 'primary') + (isPickup(order) ? cancel : statusButton(order, 'cancelled', 'Batalkan / retur', 'danger'));
     default:        return '';
   }
 }
 
 function customerOrderActions(order) {
   switch (order.status) {
-    case 'pending':   return statusButton(order, 'cancelled', 'Batalkan pesanan', 'danger');
-    case 'shipped':   return order.cod ? '' : statusButton(order, 'completed', 'Pesanan sudah diterima', 'primary');
+    // Setelah bukti transfer dikirim, pembatalan diputuskan toko (server juga menolak)
+    case 'pending':   return order.proof_at
+      ? (order.cancel_requested_at
+        ? '<span class="muted small">Permintaan batal terkirim. Toko sedang mengecek pembayaran Anda.</span>'
+        : '<span class="muted small">Bukti transfer sudah dikirim, jadi pembatalan diputuskan toko.</span>'
+          + `<button class="btn sm danger" data-act="order-cancel-request" data-id="${order.id}">Minta dibatalkan</button>`)
+      : statusButton(order, 'cancelled', 'Batalkan pesanan', 'danger');
+    case 'shipped':   return order.cod ? '' : statusButton(order, 'completed', isPickup(order) ? 'Sudah saya ambil' : 'Pesanan sudah diterima', 'primary');
     case 'completed':
     case 'cancelled': return `<button class="btn sm primary" data-act="reorder" data-id="${order.id}">Beli lagi</button>`;
     default:          return '';
@@ -1070,13 +1086,17 @@ const AUTO_CANCEL_TEXT = {
   payment_failed: 'Dibatalkan otomatis karena pembayaran e-wallet gagal atau ditolak. Silakan buat pesanan baru.'
 };
 // Masalah uang yang harus ditangani admin: pembayaran masuk setelah pesanan batal, atau nominal tidak cocok
+const paymentFlagTitle = order => order.needs_refund ? 'Perlu refund'
+  : order.payment_issue === 'proof_cancelled' ? 'Cek bukti transfer' : 'Nominal tidak cocok';
 const paymentFlagText = order => order.needs_refund
   ? 'Uang pelanggan sudah masuk tetapi pesanan dibatalkan. Kembalikan dana: lewat Dashboard Xendit untuk QRIS/e-wallet, atau transfer balik untuk transfer bank.'
-  : order.payment_issue ? 'Nominal pembayaran tidak sama dengan total pesanan. Periksa di Dashboard Xendit.' : '';
+  : order.payment_issue === 'proof_cancelled'
+    ? 'Pesanan dibatalkan karena akun pelanggan diubah, padahal bukti transfer sudah diunggah. Cek mutasi rekening; bila uang sudah masuk, transfer balik ke pelanggan.'
+    : order.payment_issue ? 'Nominal pembayaran tidak sama dengan total pesanan. Periksa di Dashboard Xendit.' : '';
 const paymentFlagBrief = order => paymentFlagText(order)
-  ? `<p class="r-hint"><b>⚠ ${order.needs_refund ? 'Perlu refund' : 'Nominal tidak cocok'}</b></p>` : '';
+  ? `<p class="r-hint"><b>⚠ ${paymentFlagTitle(order)}</b></p>` : '';
 const paymentFlagBox = order => paymentFlagText(order)
-  ? `<div class="r-note"><b>⚠ ${order.needs_refund ? 'Perlu refund' : 'Nominal tidak cocok'}</b><br>${paymentFlagText(order)}<br>
+  ? `<div class="r-note"><b>⚠ ${paymentFlagTitle(order)}</b><br>${paymentFlagText(order)}<br>
       <button type="button" class="btn sm" data-act="issue-done" data-id="${order.id}">Sudah ditangani</button></div>` : '';
 const orderAutoCancelHtml = order => AUTO_CANCEL_TEXT[order.cancel_reason]
   ? `<p class="r-auto">${AUTO_CANCEL_TEXT[order.cancel_reason]}</p>` : '';
@@ -1102,9 +1122,9 @@ function orderCardHtml(order, staff, index = 0) {
   const hint = !staff && order.status === 'pending' && order.payment_method !== 'cash'
     ? ((order.payment_method === 'qris' || isEwallet(order.payment_method)) && order.expires_at
       ? `<p class="r-hint">Bayar dalam <b class="qris-timer" data-expires="${escapeHtml(order.expires_at)}">${countdownText(msLeft(order.expires_at))}</b></p>`
-      : `<p class="r-hint">${order.proof_at ? 'Bukti terkirim. Menunggu konfirmasi admin.' : 'Belum dibayar. Buka untuk bayar.'}</p>`) : '';
+      : `<p class="r-hint">${order.proof_at ? (order.cancel_requested_at ? 'Permintaan batal terkirim. Menunggu keputusan admin.' : 'Bukti terkirim. Menunggu konfirmasi admin.') : 'Belum dibayar. Buka untuk bayar.'}</p>`) : '';
   const acts = staff ? orderActions(order) : '';
-  const proofHint = staff && order.status === 'pending' && order.proof_at ? '<p class="r-hint">Bukti transfer sudah diunggah</p>' : '';
+  const proofHint = staff && order.status === 'pending' && order.proof_at ? `<p class="r-hint">Bukti transfer sudah diunggah${order.cancel_requested_at ? ' · <b>pelanggan minta batal</b>' : ''}</p>` : '';
 
   return `
     <article class="receipt st-${order.status}" style="--i:${Math.min(index, 8)}" data-act="order-open" data-id="${order.id}" role="button" tabindex="0" aria-label="Buka pesanan ${escapeHtml(order.code)}">
@@ -1133,7 +1153,7 @@ export function orderDetailModal(order) {
     ${timelineHtml(order.status, order)}
     <ul class="r-lines">${order.items.map(orderLineHtml).join('')}${shippingLineHtml(order)}</ul>
     <div class="r-total"><span>Total</span><strong class="num">${formatRupiah(order.total)}</strong></div>
-    ${orderInfoHtml(order)}${orderAutoCancelHtml(order)}${staff ? paymentFlagBox(order) + proofBoxHtml(order, false) : ''}${payment}
+    ${orderInfoHtml(order)}${orderAutoCancelHtml(order)}${staff && order.status === 'pending' && order.cancel_requested_at ? '<div class="r-note"><b>Pelanggan minta pembatalan</b><br>Cek mutasi dulu. Bila uang sudah masuk, kembalikan dana setelah membatalkan.</div>' : ''}${staff ? paymentFlagBox(order) + proofBoxHtml(order, false) : ''}${payment}
     <div class="foot wrap"><button type="button" class="btn sm" data-act="close-modal">Tutup</button>${orderActions(order)}${remove}</div>
   </div>`);
 }

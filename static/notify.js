@@ -11,6 +11,9 @@ const POLL_MS = 20000;
 
 const store = { items: [], unread: 0, loaded: false, timer: null, busy: false, seen: new Set() };
 
+// Kabar dengan tag yang sama diperbarui di server (id tetap, created_at baru), jadi "sudah dilihat" dikenali dari id + waktunya
+const seenKey = item => item.id + '|' + item.created_at;
+
 // app.js mengisi `go` supaya modul ini tidak perlu mengenal navigasi aplikasi
 export const notifyHooks = { go: () => { } };
 
@@ -102,8 +105,8 @@ export async function refreshNotifications() {
     const data = await api('/notifications');
     if (!state.user || state.user.id !== owner) return;
     const first = !store.loaded;
-    const fresh = data.items.filter(item => !item.read && !store.seen.has(item.id));
-    data.items.forEach(item => store.seen.add(item.id));
+    const fresh = data.items.filter(item => !item.read && !store.seen.has(seenKey(item)));
+    data.items.forEach(item => store.seen.add(seenKey(item)));
     const grew = data.unread > store.unread;
     store.items = data.items;
     store.unread = data.unread;

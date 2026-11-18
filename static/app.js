@@ -52,7 +52,7 @@ import {
 } from './ui.js';
 import { choosePhoto, clearPhoto, compressImage, handlePhotoInput } from './photo.js';
 import './layout.js';
-import { detachPush, offerPush, resumePush, togglePush } from './push.js';
+import { offerPush, pushEndpoint, resumePush, togglePush } from './push.js';
 import { markAllRead, notifyHooks, openNotification, panelOpen, refreshNotifications, setPanel, startNotifications, stopNotifications } from './notify.js';
 import { applySettings, installApp, loadSettings, setTextSize, setTheme, settingsModal, syncInstall, toggleSetting } from './settings.js';
 import { applyLogFilter, visibleLogIds } from './logs-grid.js';
@@ -179,16 +179,35 @@ async function migrateLocalAddress() {
   } catch { }
 }
 
+// Token CSRF bisa usang (mis. masuk lagi di tab lain): ambil yang baru lalu coba sekali lagi
+async function requestLogout(body) {
+  try {
+    return await api('/auth/logout', { method: 'POST', body });
+  } catch (err) {
+    if (err.status !== 403) throw err;
+    const me = await api('/auth/me');
+    state.csrf = me.csrf;
+    return api('/auth/logout', { method: 'POST', body });
+  }
+}
+
 async function logout() {
   setProfileMenu(false);
   setPanel(false);
-  stopNotifications();
-  await detachPush();
+  const endpoint = await pushEndpoint();   // perangkat ini dilepas dari akun lewat permintaan keluar yang sama
   try {
-    const result = await api('/auth/logout', { method: 'POST', body: {} });
+    const result = await requestLogout(endpoint ? { endpoint } : {});
     state.csrf = result.csrf;
-  } catch { }
+  } catch (err) {
+    // Keluar yang gagal (offline, server sibuk) tidak boleh tampak berhasil: sesi di server masih hidup.
+    // 401 berarti sesi memang sudah berakhir, jadi lanjut keluar.
+    if (err.status !== 401) {
+      toast(err.status === 0 ? 'Tidak ada sambungan, belum bisa keluar. Coba lagi saat tersambung.' : err.message, 'err');
+      return;
+    }
+  }
 
+  stopNotifications();
   state.user = null;
   state.cart = {};
   state.checkout = null;
@@ -220,11 +239,16 @@ async function loadProducts() {
 const loaders = {
   shop: loadProducts,
   products: loadProducts,
-  async orders() { state.orders = (await api('/orders')).orders; },
+  async orders() {
+    state.orders = (await api('/orders')).orders;
+    // "Beli lagi" membaca katalog dari state.productMap. Bila aplikasi dibuka langsung ke Pesanan (mis. lewat notifikasi),
+    // katalog belum pernah dimuat, jadi semua barang dianggap tidak tersedia. Gagal memuat tidak boleh merusak daftar pesanan.
+    if (isCustomer() && !state.products.length) await loadProducts().catch(() => { });
+  },
   async dashboard() { state.stats = await api('/stats'); },
   async users() { state.users = (await api('/users')).users; },
   async logs() {
-    state.logs = (await api('/logs')).logs.filter(log => log.action !== 'log_hapus');
+    state.logs = (await api('/logs')).logs;
     const present = new Set(state.logs.map(log => log.id));
     state.selectedLogs.forEach(id => { if (!present.has(id)) state.selectedLogs.delete(id); });
   }
@@ -725,11 +749,42 @@ async function resolvePaymentIssue(el) {
   }
 }
 
+// Staf membatalkan pesanan yang sudah dibayar/dikirim: dialog menjelaskan stok, barang, dan refund
+function cancelOrderMessage(order) {
+  const parts = [];
+  if (order?.status === 'shipped') parts.push('Pesanan sudah dikirim atau siap diambil. Pastikan barangnya sudah kembali ke toko, karena stok langsung dikembalikan.');
+  else parts.push('Stok produk dikembalikan.');
+  if (order?.status === 'pending' && order.proof_at) {
+    parts.push('Pelanggan sudah mengunggah bukti transfer. Cek mutasi dulu; bila uangnya sudah masuk, kembalikan dana secara manual.');
+  }
+  if (order && !order.cod && ['paid', 'shipped'].includes(order.status)) {
+    parts.push('Pesanan ini sudah dibayar, jadi akan ditandai "Perlu refund". Kembalikan dana pelanggan, lalu tekan "Sudah ditangani" di pesanan ini.');
+  }
+  parts.push('Pesanan tidak bisa dibuka lagi.');
+  return parts.join(' ');
+}
+
+// Pelanggan: setelah bukti transfer dikirim, pembatalan diputuskan toko, jadi pelanggan mengirim permintaan
+async function requestCancel(el) {
+  const order = state.orders.find(item => item.id === el.dataset.id);
+  if (!order) return;
+  const ok = await confirmDialog('Minta pembatalan?', 'Bukti transfer Anda sudah dikirim, jadi toko mengecek pembayaran dulu lalu memutuskan. Bila disetujui dan uang sudah masuk, dana dikembalikan.', 'Kirim permintaan');
+  if (!ok) { orderDetailModal(order); return; }
+  try {
+    await api(`/orders/${order.id}/cancel-request`, { method: 'POST', body: {} });
+    toast('Permintaan batal terkirim. Toko akan menghubungi Anda.', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+  await reload();
+}
+
 async function changeOrderStatus(el) {
   const { id, status } = el.dataset;
 
   if (status === 'cancelled') {
-    const confirmed = await confirmDialog('Batalkan pesanan?', 'Stok produk dikembalikan dan pesanan tidak bisa dibuka lagi.', 'Batalkan pesanan', true);
+    const order = state.orders.find(item => item.id === id);
+    const confirmed = await confirmDialog('Batalkan pesanan?', cancelOrderMessage(order), 'Batalkan pesanan', true);
     if (!confirmed) return;
   }
 
@@ -886,7 +941,7 @@ function deleteUser(el) {
   const user = state.users.find(u => u.id === el.dataset.id);
   return confirmAndDelete({
     title: 'Hapus pengguna?',
-    message: `Akun @${user.username} dihapus permanen.`,
+    message: `Akun @${user.username} dihapus permanen. Pesanan yang belum dibayar ikut dibatalkan dan foto bukti transfernya dihapus. Akun yang masih punya pesanan berjalan tidak bisa dihapus: nonaktifkan saja.`,
     okLabel: 'Hapus akun',
     path: '/users/' + user.id,
     successMessage: 'Akun dihapus'
@@ -1202,6 +1257,7 @@ const actions = {
   'orders-clear': clearOrderHistory,
   reorder,
   'order-status': changeOrderStatus,
+  'order-cancel-request': requestCancel,
   'issue-done': resolvePaymentIssue,
 
   'product-new': () => productModal(null),
@@ -1791,7 +1847,7 @@ async function boot() {
   setInterval(tickTimers, 1000);
   // Notifikasi diketuk saat aplikasi sudah terbuka: pindah ke layar yang diminta
   navigator.serviceWorker?.addEventListener('message', event => {
-    if (event.data?.type === 'open-view' && state.user) show(event.data.view);
+    if (event.data?.type === 'open-view' && state.user && ['orders', 'dashboard'].includes(event.data.view)) notifyHooks.go(event.data.view);
     if (event.data?.type === 'push-received') refreshNotifications();   // kabar baru tiba: lonceng ikut diperbarui
   });
 

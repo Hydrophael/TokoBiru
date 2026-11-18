@@ -112,12 +112,13 @@ export async function disablePush() {
   await subscription.unsubscribe().catch(() => { });
 }
 
-// Saat keluar: perangkat ini dilepas dari akun di server (agar akun lain di perangkat yang sama tidak menerima kabar toko),
+// Saat keluar: perangkat ini dilepas dari akun di server oleh /auth/logout (agar akun lain di perangkat yang sama tidak menerima kabar toko),
 // tapi izin dan langganan di browser dibiarkan supaya masuk lagi tidak perlu mengaktifkan ulang.
-export async function detachPush() {
-  if (!supported() || !state.user) return;
+// Alamat langganan perangkat ini ('' bila tidak ada); dikirim bersama permintaan keluar, lalu server melepasnya dari akun.
+export async function pushEndpoint() {
+  if (!supported() || !state.user) return '';
   const subscription = await currentSubscription();
-  if (subscription) await api('/push/unsubscribe', { method: 'POST', body: { endpoint: subscription.endpoint } }).catch(() => { });
+  return subscription ? subscription.endpoint : '';
 }
 
 // Saat masuk: bila akun ini pernah mengaktifkannya di perangkat ini dan izinnya masih ada, daftarkan lagi tanpa bertanya
