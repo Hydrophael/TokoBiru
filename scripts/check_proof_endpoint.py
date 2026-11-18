@@ -6,6 +6,10 @@ sys.path.insert(0, sys.argv[1] if len(sys.argv) > 1 else ".")
 os.environ.update(SECRET_KEY="uji", GEMINI_API_KEY="kunci-uji", PROOF_BANK_HINT="4821",
                   MONGO_URI="mongodb://127.0.0.1:1")
 import mongomock
+from mongomock.collection import BulkOperationBuilder as _Bulk
+_add_update = _Bulk.add_update
+_Bulk.add_update = lambda self, *a, sort=None, **k: _add_update(self, *a, **k)
+
 from bson import ObjectId
 from werkzeug.security import generate_password_hash
 import app as tb
