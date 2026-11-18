@@ -90,10 +90,10 @@ TUGAS = {
             ],
         },
     },
-    "keamanan": {
-        "modul": "keamanan",
+    "security": {
+        "modul": "security",
         "kepala": (
-            '"""TokoBiru - keamanan: header, IP klien, pembatasan percobaan, sesi dan peran, CSRF, dan log audit.\n\n'
+            '"""TokoBiru - security: header, IP klien, pembatasan percobaan, sesi dan peran, CSRF, dan log audit.\n\n'
             "Pemeriksaan sebelum/sesudah request dipasang lewat pasang(app). Nama-nama di sini masih diimpor\n"
             'ulang oleh app.py supaya kode dan tes lama tetap jalan.\n"""\n'
             "import secrets\n"
@@ -118,9 +118,9 @@ TUGAS = {
             "    app.before_request(guard)\n"
             "    app.after_request(secure_headers)\n"
         ),
-        "boleh_hilang": ["keamanan"],   # nama baru (impor modul) di app.py, bukan kehilangan
-        "impor_ekstra": "from tokobiru import keamanan  # noqa: E402\n",
-        "setelah_baris": ("connection.after_connect = bootstrap\n", "keamanan.pasang(app)\n"),
+        "boleh_hilang": ["security"],   # nama baru (impor modul) di app.py, bukan kehilangan
+        "impor_ekstra": "from tokobiru import security  # noqa: E402\n",
+        "setelah_baris": ("connection.after_connect = bootstrap\n", "security.pasang(app)\n"),
     },
 }
 
