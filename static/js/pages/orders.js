@@ -142,7 +142,7 @@ function orderCardHtml(order, staff, index = 0) {
     ? ((order.payment_method === 'qris' || isEwallet(order.payment_method)) && order.expires_at
       ? `<p class="r-hint">Bayar dalam <b class="qris-timer" data-expires="${escapeHtml(order.expires_at)}">${countdownText(msLeft(order.expires_at))}</b></p>`
       : `<p class="r-hint">${order.proof_at ? (order.cancel_requested_at ? 'Permintaan batal terkirim. Menunggu keputusan admin.' : 'Bukti terkirim. Menunggu konfirmasi admin.') : 'Belum dibayar. Buka untuk bayar.'}</p>`) : '';
-  const acts = staff ? orderActions(order) : '';
+  const acts = staff ? staffOrderActions(order) : '';
   const proofHint = staff && order.status === 'pending' && order.proof_at ? `<p class="r-hint">Bukti transfer sudah diunggah${order.cancel_requested_at ? ' · <b>pelanggan minta batal</b>' : ''}</p>` : '';
 
   return `
