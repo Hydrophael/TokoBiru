@@ -1,8 +1,8 @@
 """TokoBiru - konfigurasi: environment variable dan konstanta aplikasi.
 
 Semua nilai dibaca sekali saat modul diimpor. Modul lain memakainya lewat
-`from tokobiru import config` lalu `config.NAMA`, atau (sementara, selama app.py
-masih besar) lewat `from tokobiru.core.config import *`.
+from tokobiru import config lalu config.NAMA, atau (sementara, selama app.py
+masih besar) lewat from tokobiru.core.config import *.
 """
 import os
 import re

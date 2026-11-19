@@ -1,6 +1,5 @@
 """TokoBiru - validasi dan sanitasi input: regex, pesan galat, Form, decode foto, dan pembaca body JSON.
 
-Nama-nama di sini masih diimpor ulang oleh app.py supaya kode dan tes lama tetap jalan.
 """
 import base64
 import re

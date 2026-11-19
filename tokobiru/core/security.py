@@ -1,7 +1,5 @@
 """TokoBiru - security: header, IP klien, pembatasan percobaan, sesi dan peran, CSRF, dan log audit.
 
-Pemeriksaan sebelum/sesudah request dipasang lewat pasang(app). Nama-nama di sini masih diimpor
-ulang oleh app.py supaya kode dan tes lama tetap jalan.
 """
 import secrets
 from datetime import timedelta

@@ -1,6 +1,5 @@
 """TokoBiru - mengubah dokumen MongoDB menjadi JSON untuk klien (menyembunyikan field internal).
 
-Nama-nama di sini masih diimpor ulang oleh app.py supaya kode dan tes lama tetap jalan.
 """
 from datetime import datetime
 

@@ -1,7 +1,7 @@
 """TokoBiru - hash dan pemeriksaan password.
 
 Dipisah supaya tes cukup mem-patch satu tempat (lihat tests/conftest.py). Pemanggil harus memakai
-`passwords.hash_password(...)`, bukan `from tokobiru.core.passwords import hash_password`, supaya patch berlaku.
+passwords.hash_password(...), bukan from tokobiru.core.passwords import hash_password, supaya patch berlaku.
 """
 import secrets
 
