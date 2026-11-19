@@ -1,0 +1,22 @@
+/* TokoBiru - themes/dark.css (5 rules) */
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0a1422; --bg-soft:#16283f; --surface:#112036;
+  --ink:#e9eff8; --ink2:#b9c8dc; --muted:#9db0c7;
+  --line:#243a58; --line-strong:#38557f; --field:#7390b3; --track:#223a5c; --track-edge:#7390b3; --bar:#4d9df0; --amber-bar:#f0b429;
+  --blue:#2a74d4; --blue-d:#1f61b8; --on-blue:#fff; --blue-text:#8bbcf7; --blue-soft:#17304f; --blue-ring:rgba(120,175,245,.35); --blue-l:#2f5385; --focus:#8bbcf7;
+  --navy:#1b3d70; --hero-a:#0a2a5e; --hero-b:#0d4a9a; --hero-ink:#fff; --hero-glow:rgba(255,255,255,.12); --hero-line:rgba(255,255,255,.24);
+  --mark-a:#5aa7f0; --mark-b:#0b5fc4; --toast-act:#ffd451;
+  --accent:#ffc61a; --on-accent:#0c2342; --thumb-on:#fff;
+  --ok:#6fd9ae; --ok-bg:#0f2f27; --ok-line:#1f6a52; --ok-solid:#0f7a5a;
+  --warn:#f2c35b; --warn-bg:#33270a; --warn-line:#6b5217;
+  --err:#ff8f99; --err-bg:#3a1319; --err-line:#7a2a34; --err-solid:#c9303f; --err-solid-d:#a82532;
+  --t0a:#17304f; --t0b:#102440; --t1a:#3b2f0e; --t1b:#2a2209; --t2a:#3d1c1c; --t2b:#2b1414; --t3a:#0f3a40; --t3b:#0b2a2f;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.3);
+  --shadow-lg:0 2px 4px rgba(0,0,0,.4),0 14px 34px rgba(0,0,0,.5);
+  --scrim:rgba(0,0,0,.65);
+}
+:root[data-theme="dark"] .pt-dots i{background:rgba(255,255,255,.3)}
+:root[data-theme="dark"] .toast{border:1px solid var(--line-strong)}
+:root[data-theme="dark"] .fly.photo{border-color:var(--surface)}
+:root[data-theme="dark"] img.photo,:root[data-theme="dark"] .mini img{background:#fff}
