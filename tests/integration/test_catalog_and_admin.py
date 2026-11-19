@@ -1,3 +1,5 @@
+from bson import ObjectId
+from tokobiru.services.orders import pricing
 from tokobiru.routes import orders as orders_route
 from tokobiru.services import products as products_svc
 
@@ -261,3 +263,58 @@ class TestSeedDemo:
         for _, username, _, role in tokobiru.DEMO_USERS:
             assert db.users.find_one({"username": username})["role"] == role
         assert anon.login("master_demo", tokobiru.DEMO_PASSWORD).status_code == 200
+
+class TestLaporanPenjualan:
+    @staticmethod
+    def hari_lalu(n):
+        return (tokobiru.utcnow() + tokobiru.WIB_OFFSET - tokobiru.timedelta(days=n)).date().isoformat()
+
+    @staticmethod
+    def bayar(customer, admin, body):
+        oid = customer.post("/api/orders", body).get_json()["order"]["id"]
+        admin.patch(f"/api/orders/{oid}/status", {"status": "paid"})
+        return oid
+
+    def test_ongkir_tidak_dihitung_sebagai_omzet(self, customer, admin, product, monkeypatch):
+        monkeypatch.setattr(pricing, "SHIPPING_FEE", 10000)
+        self.bayar(customer, admin, order_body(product, 1))
+        stats = admin.get("/api/stats").get_json()
+        assert stats["revenue"] == 65000 and stats["today"]["revenue"] == 65000
+        ringkasan = admin.get("/api/stats/sales").get_json()["summary"]
+        assert ringkasan["revenue"] == 65000 and ringkasan["shipping"] == 10000
+
+    def test_hanya_pesanan_dibayar_yang_dihitung(self, customer, admin, product):
+        customer.post("/api/orders", order_body(product, 1))   # tetap pending
+        assert admin.get("/api/stats/sales").get_json()["summary"]["orders"] == 0
+
+    def test_rentang_tanggal_memakai_tanggal_bayar(self, customer, admin, product, db):
+        lama = self.bayar(customer, admin, order_body(product, 1))
+        self.bayar(customer, admin, order_body(product, 2))
+        db.orders.update_one({"_id": ObjectId(lama)},
+                             {"$set": {"paid_at": tokobiru.utcnow() - tokobiru.timedelta(days=40)}})
+        bawaan = admin.get("/api/stats/sales").get_json()
+        assert bawaan["summary"]["orders"] == 1 and bawaan["summary"]["revenue"] == 130000
+        assert len(bawaan["series"]) == 30 and bawaan["group"] == "day"
+        luas = admin.get(f"/api/stats/sales?from={self.hari_lalu(45)}").get_json()
+        assert luas["summary"]["orders"] == 2 and luas["summary"]["items"] == 3
+
+    def test_omzet_per_bulan_dan_batas_grafik_harian(self, customer, admin, product):
+        self.bayar(customer, admin, order_body(product, 1))
+        bulanan = admin.get(f"/api/stats/sales?from={self.hari_lalu(45)}&group=month").get_json()
+        assert bulanan["group"] == "month" and all(len(p["key"]) == 7 for p in bulanan["series"])
+        assert sum(p["revenue"] for p in bulanan["series"]) == 65000
+        panjang = admin.get(f"/api/stats/sales?from={self.hari_lalu(120)}&group=day").get_json()
+        assert panjang["group"] == "month"
+
+    def test_produk_terlaris_urut_jumlah_terjual(self, customer, admin, product, db):
+        teh = db["master_product"].insert_one({"name": "Teh Botol", "category": "Minuman", "price": 5000, "stock": 50}).inserted_id
+        body = {"address": ADDRESS, "phone": PHONE,
+                "items": [{"product_id": str(product["_id"]), "qty": 1}, {"product_id": str(teh), "qty": 5}]}
+        self.bayar(customer, admin, body)
+        top = admin.get("/api/stats/sales").get_json()["top_products"]
+        assert [(p["name"], p["qty"], p["revenue"]) for p in top] == [("Teh Botol", 5, 25000), ("Beras 5kg", 1, 65000)]
+
+    @pytest.mark.parametrize("query", [
+        "from=abc", "from=2026-12-01&to=2026-11-01", "from=2020-01-01&to=2026-11-01"])
+    def test_rentang_tidak_valid_422(self, admin, query):
+        assert admin.get(f"/api/stats/sales?{query}").status_code == 422

@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 from tokobiru.core.config import (
     LOW_STOCK_LIMIT,
@@ -13,7 +13,7 @@ from tokobiru.core.security import current_user, roles_required
 from tokobiru.core.serializers import serialize
 from tokobiru.services.orders.expiry import sweep_expired_orders
 from tokobiru.services.products import NO_IMAGE, product_json
-from tokobiru.services.stats import order_summary, today_summary
+from tokobiru.services.stats import order_summary, report_group, report_range, sales_report, today_summary
 
 bp = Blueprint("stats", __name__)
 
@@ -42,3 +42,13 @@ def stats():
     if current_user()["role"] == "master":
         result["users"] = {role: db.users.count_documents({"role": role}) for role in ROLES}
     return jsonify(result)
+
+
+@bp.get("/api/stats/sales")
+@roles_required(*STAFF_ROLES)
+def sales():
+    start, end = report_range(request.args.get("from", ""), request.args.get("to", ""))
+    days = (end - start).days + 1
+    group = report_group(request.args.get("group", ""), days)
+    report = sales_report(get_db(), start, end, group)
+    return jsonify({"from": start.isoformat(), "to": end.isoformat(), "group": group, "days": days, **report})

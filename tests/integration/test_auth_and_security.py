@@ -118,7 +118,7 @@ class TestKeamananRequest:
 # --------------------------------------------------------------------------- #
 class TestOtorisasi:
     @pytest.mark.parametrize("path", [
-        "/api/products", "/api/orders", "/api/stats", "/api/users", "/api/logs"])
+        "/api/products", "/api/orders", "/api/stats", "/api/stats/sales", "/api/users", "/api/logs"])
     def test_tanpa_login_401(self, anon, path):
         assert anon.get(path).status_code == 401
 
@@ -126,6 +126,7 @@ class TestOtorisasi:
         ("/api/products", {"user", "admin", "master"}),
         ("/api/orders", {"user", "admin", "master"}),
         ("/api/stats", {"admin", "master"}),
+        ("/api/stats/sales", {"admin", "master"}),
         ("/api/users", {"master"}),
         ("/api/logs", {"master"}),
     ])
@@ -156,8 +157,3 @@ class TestOtorisasi:
     def test_akses_ditolak_tercatat_di_log(self, customer, db):
         customer.get("/api/users")
         assert db.logs.count_documents({"action": "akses_ditolak"}) == 1
-
-
-# --------------------------------------------------------------------------- #
-# Produk
-# --------------------------------------------------------------------------- #
