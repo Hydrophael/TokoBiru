@@ -4,7 +4,7 @@ import sys
 
 from pymongo.errors import DuplicateKeyError
 
-from tokobiru.core.connection import get_db
+from tokobiru.core.connection import ensure_indexes, get_db
 from tokobiru.errors import ApiError
 from tokobiru.services.bootstrap import DEMO_PASSWORD, DEMO_USERS, seed_demo
 from tokobiru.services.users import new_user_doc, user_form
@@ -54,6 +54,16 @@ def seed_demo_cli():
         print(f"  {role:<7} {username}" + ("" if username in created else "  (sudah ada)"))
 
 
+def ensure_indexes_cli():
+    failed = ensure_indexes(get_db())
+    if failed:
+        print("Indeks yang gagal dibuat (lihat pesan galat di atas):")
+        for name in failed:
+            print(f"  - {name}")
+        sys.exit(1)
+    print("Semua indeks siap.")
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "create-master":
@@ -62,8 +72,10 @@ def main():
         seed_demo_cli()
     elif cmd == "gen-vapid":
         gen_vapid_cli()
+    elif cmd == "ensure-indexes":
+        ensure_indexes_cli()
     else:
-        print("Perintah: python cli.py [create-master | seed-demo | gen-vapid]")
+        print("Perintah: python cli.py [create-master | seed-demo | gen-vapid | ensure-indexes]")
         sys.exit(1)
 
 

@@ -125,6 +125,7 @@ EWALLET_TTL_MINUTES = {
 # Alamat publik toko (mis. https://tokobiru.vercel.app): dipakai untuk tautan kembali dari e-wallet
 PUBLIC_URL = _env_str("PUBLIC_URL").rstrip("/")
 LOG_RETENTION_DAYS = _env_int("LOG_RETENTION_DAYS", 90)
+INDEX_SETUP_ON_CONNECT = _env_str("INDEX_SETUP", "1").lower() not in ("0", "false", "off", "tidak")
 MAX_PENDING_ORDERS = _env_int("MAX_PENDING_ORDERS", 3)
 # Pesanan tunai (COD) dihitung terpisah: mereka menunggu toko, bukan menunggu pelanggan membayar
 MAX_PENDING_COD = _env_int("MAX_PENDING_COD_ORDERS", 5)
