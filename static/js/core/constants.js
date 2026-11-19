@@ -152,8 +152,9 @@ export const emptyLogFilter = () => ({ q: '', group: '', action: '' });
 export const emptyProductFilter = () => ({ group: '', category: '' });
 
 export const PRODUCT_GROUPS = [
-  ['low', 'Stok menipis', ''],
-  ['out', 'Stok habis', '']
+  { id: '',    label: 'Semua',        test: () => true },
+  { id: 'low',  label: 'Stok menipis', test: product => product.stock > 0 && product.stock <= LOW_STOCK_LIMIT },
+  { id: 'out',  label: 'Stok habis',   test: product => product.stock === 0 }
 ];
 
 export const isEwallet = method => Boolean(EWALLET_BRAND[method]);
